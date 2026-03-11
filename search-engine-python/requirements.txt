@@ -1,0 +1,7 @@
+sentence-transformers
+faiss-cpu
+rank-bm25
+grpcio
+grpcio-tools
+numpy
+ujson

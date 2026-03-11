@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  python-search-engine:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.python
+    container_name: python-search-engine
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./search-engine-python:/app
+      - ./dataset:/dataset
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - redis
+
+  java-backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.java
+    container_name: java-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_REDIS_HOST=redis
+      - SPRING_REDIS_PORT=6379
+    depends_on:
+      - redis
+      - python-search-engine
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    depends_on:
+      - java-backend

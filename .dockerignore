@@ -1,0 +1,20 @@
+# ignore datasets
+dataset/
+
+# ignore indexes
+search-engine-python/faiss.index
+search-engine-python/bm25.pkl
+search-engine-python/docs.pkl
+search-engine-python/indexer.py
+
+# ignore generated data
+*.jsonl
+*.pkl
+*.index
+
+# frontend stuff
+frontend/node_modules/
+
+# git
+.git
+.gitignore
