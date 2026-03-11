@@ -29,8 +29,8 @@ NeuralSeek Engine lets you search across the full arXiv computer science corpus 
 │                      Port 8080                       │
 │        Redis @Cacheable · gRPC Client Stub           │
 └─────────────────────────┬────────────────────────────┘
-                           │  gRPC / Protocol Buffers v3
-                           ▼  Port 50051
+                          │  gRPC / Protocol Buffers v3
+                          ▼  Port 50051
 ┌──────────────────────────────────────────────────────┐
 │          Python 3.11 — ML Search Engine              │
 │                                                      │
