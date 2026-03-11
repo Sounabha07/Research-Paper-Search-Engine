@@ -22,14 +22,15 @@ public class SearchService {
         private SearchServiceGrpc.SearchServiceBlockingStub searchServiceStub;
 
         // SEARCH
-        @Cacheable(value = "search", key = "#query")
-        public List<PaperDto> searchPapers(String query) {
+        @Cacheable(value = "search", key = "#query + '_' + #page")
+        public List<PaperDto> searchPapers(String query, int page) {
 
-                System.out.println("Cache miss for query: " + query);
+                System.out.println("Cache miss for query: " + query + " page: " + page);
 
                 SearchRequest request = SearchRequest.newBuilder()
                                 .setQuery(query)
-                                .setTopK(10)
+                                .setPage(page)
+                                .setSize(10)
                                 .build();
 
                 SearchResponse response = searchServiceStub.search(request);
