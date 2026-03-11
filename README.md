@@ -1,59 +1,221 @@
-# NeuralSeek Engine — Distributed Research Paper Search Engine
+<div align="center">
 
-> A production-grade, distributed search engine for **1.1 million+ arXiv computer science papers**, powered by hybrid BM25 + semantic vector retrieval with cross-encoder reranking.
+# NeuralSeek Engine
+
+### Distributed Research Paper Search Engine
+
+*Hybrid BM25 + Semantic Vector Search over 1.1M+ arXiv Computer Science Papers*
+
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Java](https://img.shields.io/badge/Java-17-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.2-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A?style=for-the-badge&logo=google&logoColor=white)
+
+</div>
 
 ---
 
-## What It Does
+## Key Highlights
 
-NeuralSeek Engine lets you search across the full arXiv computer science corpus using natural language queries. It combines the precision of classic keyword search with the semantic understanding of transformer embeddings — the same hybrid retrieval approach used by state-of-the-art academic and commercial search systems.
-
-**Try searching:**
-- `"attention mechanisms in NLP"` — finds semantically related papers even without exact keyword matches
-- `"graph neural networks fraud detection"` — cross-domain semantic retrieval
-- `"BERT pretraining"` — precise keyword matching on terminology
+- 🔍 **Hybrid retrieval** — BM25 keyword search fused with FAISS dense vector search over 1.1M+ papers
+- 🤖 **Cross-encoder reranking** — BERT-based `ms-marco-MiniLM-L-6-v2` reranks top-100 candidates for high-precision results
+- ⚡ **Redis caching** — repeat query latency drops from ~600ms → ~1ms with `@Cacheable` at the API layer
+- 🔗 **Cross-language gRPC** — Python ML engine ↔ Java API gateway communicate via typed Protocol Buffer messages
+- 🧠 **Transformer embeddings** — `all-MiniLM-L6-v2` (384-dim) encodes queries for semantic similarity search
+- 📖 **1.1M paper corpus** — extracted from the full 3M-paper arXiv snapshot, CS-only, LaTeX-cleaned
+- 🐳 **Fully containerised** — one `docker compose up --build` starts all 4 services
+- 🔤 **Spell correction + autocomplete** — SymSpell O(1) correction + prefix trie typeahead
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              React 19 + TypeScript (Vite)            │
-│                      Port 3000                       │
-└─────────────────────────┬────────────────────────────┘
-                          │  HTTP REST (axios)
-                          ▼
-┌──────────────────────────────────────────────────────┐
-│           Java Spring Boot 3.2 — API Gateway         │
-│                      Port 8080                       │
-│        Redis @Cacheable · gRPC Client Stub           │
-└─────────────────────────┬────────────────────────────┘
-                          │  gRPC / Protocol Buffers v3
-                          ▼  Port 50051
-┌──────────────────────────────────────────────────────┐
-│          Python 3.11 — ML Search Engine              │
-│                                                      │
-│   BM25 Title + Abstract Indexes  (rank-bm25)         │
-│   FAISS Dense Vector Index        (faiss-cpu)        │
-│   Sentence Embeddings             (all-MiniLM-L6-v2) │
-│   Cross-Encoder Reranker  (ms-marco-MiniLM-L-6-v2)   │
-│   Spell Correction                (SymSpell)         │
-│   Prefix Trie                     (Autocomplete)     │
-└──────────────────────────────────────────────────────┘
-                           │
-                  ┌────────┴────────┐
-                  │   Redis 7       │
-                  │  Result Cache   │
-                  └─────────────────┘
+┌────────────────────────────────────────────────┐
+│          React 19 + TypeScript (Vite)          │
+│                   Port 3000                    │
+└──────────────────────┬─────────────────────────┘
+                       │  HTTP REST / JSON (axios)
+                       ▼
+┌────────────────────────────────────────────────┐
+│       Java Spring Boot 3.2 — API Gateway       │
+│                   Port 8080                    │
+│                                                │
+│  ┌─────────────────┐    ┌─────────────────┐    │
+│  │ SearchController│────│  SearchService  │    │
+│  └─────────────────┘    └────────┬────────┘    │
+│                                  │             │
+│                                  ▼             │
+│                    ┌─────────────────────────┐ │
+│                    │     Redis 7 Cache       │ │
+│                    │   @Cacheable by         │ │
+│                    │   (query, page)         │ │
+│                    └─────────────────────────┘ │
+└──────────────────────┬─────────────────────────┘
+                       │  gRPC / Protocol Buffers v3
+                       ▼  Port 50051
+┌────────────────────────────────────────────────┐
+│        Python 3.11 — ML Search Engine          │
+│                                                │
+│  BM25 Title + Abstract Indexes  (rank-bm25)    │
+│  FAISS Dense Vector Index       (faiss-cpu)    │
+│  SentenceTransformer Embeddings (MiniLM-L6-v2) │
+│  Cross-Encoder Reranker  (ms-marco-MiniLM-L-6) │
+│  Spell Correction               (SymSpell)     │
+│  Prefix Trie                    (Autocomplete) │
+└────────────────────────────────────────────────┘
 ```
 
-**Communication:**
-- **Frontend → Java:** HTTP REST (JSON)  
-- **Java → Python:** gRPC with binary Protocol Buffer encoding (typed, schema-governed)  
-- **Java → Redis:** Spring `@Cacheable` abstraction
+**Protocols:**
+- `Frontend → Java` — HTTP REST, JSON responses, CORS enabled
+- `Java → Python` — gRPC with binary Protobuf encoding (schema-governed, typed)
+- `Java → Redis` — Spring Data Redis abstraction (zero boilerplate caching)
 
-**Service startup order:** Redis → Python gRPC engine → Java backend → React frontend
+**Startup order:** Redis → Python gRPC Engine → Java Backend → React Frontend
+
+---
+
+## System Design Rationale
+
+| Decision | Rationale |
+|---|---|
+| **Python for ML engine** | Best-in-class ML ecosystem. sentence-transformers, FAISS, rank-bm25, and SymSpell all have native Python support. No viable Java equivalent. |
+| **Java Spring Boot as API gateway** | Production-grade HTTP server with Spring's `@Cacheable` abstraction, type-safe gRPC client injection, and mature REST tooling. Separates ML concerns from API concerns. |
+| **gRPC instead of REST between services** | Binary Protobuf encoding is ~5–10× more efficient than JSON. Schema-governed — breaking changes caught at compile time, not runtime. Auto-generates stubs for both Python and Java from a single `.proto` file. |
+| **Redis at the Java layer** | Caches the final serialised result set. Cache hits never touch the Python engine at all — eliminating BM25 + FAISS + cross-encoder inference cost entirely. |
+| **Microservice split** | Python ML worker and Java API are independently deployable and scalable. ML model upgrades (swap embeddings model) require no Java changes. API changes require no Python changes. Only `search.proto` is the coupling point. |
+
+---
+
+## Search Pipeline
+
+```
+User Query: "attention mechanisms transformers"
+                    │
+                    ▼
+     ┌────────────────────────────┐
+     │   1. Spell Correction      │
+     │   SymSpell (O(1) lookup)   │
+     │   Custom dict from titles  │
+     └──────────────┬─────────────┘
+                    │
+                    ▼
+     ┌──────────────────────────────┐
+     │   2. Tokenisation            │
+     │   regex r"\b\w+\b"           │
+     │   ["attention", "mechanisms" │
+     │    "transformers"]           │
+     └──────┬───────────────┬───────┘
+            │               │
+            ▼               ▼
+  ┌────────────────┐  ┌────────────────────────┐
+  │ 3. BM25 Scoring│  │ 4. Semantic Embedding  │
+  │                │  │                        │
+  │ title_score ×  │  │ MiniLM.encode(query)   │
+  │   3.0          │  │ → 384-dim float32 vec  │
+  │ abstract_score │  │                        │
+  │   × 1.5        │  │ FAISS.search(vec, k=   │
+  │ normalise [0,1]│  │   200) → top-200 by L2 │
+  │ → top-200      │  │                        │
+  └─────────┬──────┘  └─────┬──────────────────┘
+            │               │
+            ▼               ▼
+     ┌──────────────────────────────┐
+     │   5. Candidate Fusion        │
+     │   union(BM25-200, FAISS-200) │
+     │   score = bm25 +             │
+     │     0.75 × (1/1+L2_dist)     │
+     │   sort ↓ → top-100           │   
+     └──────────────┬───────────────┘
+                    │
+                    ▼
+     ┌─────────────────────────────┐
+     │   6. Cross-Encoder Rerank   │
+     │   pairs = [(query, title +  │
+     │     abstract)] × 100        │
+     │   BERT cross-attention      │
+     │   scores → re-sort ↓        │
+     └──────────────┬──────────────┘
+                    │
+                    ▼
+     ┌──────────────────────────────┐
+     │   7. Pagination Slice        │
+     │   start = (page-1) × 10      │
+     │   return reranked[start:end] │
+     │   10 results per page        │
+     │   max 10 pages (100 total)   │
+     └──────────────────────────────┘
+```
+
+### Why Hybrid Retrieval Works
+
+| Method | Strength | Weakness |
+|---|---|---|
+| **BM25** | Exact terminology, acronyms ("BERT", "CNN"), author names | Vocabulary mismatch — misses synonyms and paraphrases |
+| **Semantic (FAISS)** | Concept-level similarity — "seq2seq" matches "encoder-decoder" | Imprecise for specific technical terms |
+| **Hybrid fusion** | Maximises both precision AND recall | Requires two infrastructure components |
+| **Cross-encoder rerank** | Full bidirectional attention over (query, document) — highest quality relevance | Computationally expensive; only feasible on a short candidate list |
+
+The two-stage design (cheap retrieval → expensive reranking) is the same architecture used by production search teams at major tech companies and described in academic systems like DPR (Facebook Research) and ColBERT.
+
+---
+
+## Dataset & Indexing Pipeline
+
+```
+arxiv-metadata-oai-snapshot.json
+          (~3M papers, all fields, JSONL)
+                       │
+                       ▼
+         ┌───────────────────────────┐
+         │   extract_papers.py       │
+         │   Filter: "cs." in        │
+         │   categories              │
+         │   Flatten author names    │
+         │   Construct pdf_url       │
+         └─────────────┬─────────────┘
+                       │
+              papers_cs.jsonl
+               (~1.1M papers)
+                       │
+                       ▼
+         ┌───────────────────────────┐
+         │   clean_dataset.py        │
+         │   LaTeX token replacement │
+         │   (\alpha → "alpha")      │
+         │   Accent stripping        │
+         │   Unicode NFKD → ASCII    │
+         │   Whitespace collapse     │
+         └─────────────┬─────────────┘
+                       │
+          papers_cs_clean.jsonl
+                       │
+             ┌─────────┴────────────┐
+             │                      │
+             ▼                      ▼
+  ┌──────────────────┐   ┌────────────────────────────┐
+  │ Full deployment  │   │  filter_dataset_for_aws.py │
+  │ ~1.1M papers     │   │  Per-category hard caps    │
+  │ (high RAM)       │   │  cs.AI: 6K, cs.LG: 6K,     │
+  └──────────┬───────┘   │  cs.IR: 5K, ...            │
+             │           │  Total: ~74K papers        │
+             │           └───────────┬────────────────┘
+             │                       │
+             └──────────┬────────────┘
+                        │  Offline index build
+                        ▼
+           ┌────────────────────────────────────┐
+           │  bm25_title.pkl   (BM25 titles)    │
+           │  bm25_abstract.pkl (BM25 abstracts)│
+           │  faiss.index      (384-dim vecs)   │
+           │  docs.pkl         (metadata)       │
+           └────────────────────────────────────┘
+```
+
+**CS Categories Indexed:** cs.AI · cs.LG · cs.CL · cs.CV · cs.NE · cs.DB · cs.IR · cs.DC · cs.DS · cs.GT · cs.CG · cs.CC · cs.FL · cs.LO · cs.DM · cs.SE · cs.CR · cs.NA
 
 ---
 
@@ -61,165 +223,66 @@ NeuralSeek Engine lets you search across the full arXiv computer science corpus 
 
 ### Machine Learning / Search
 
-| Technology | Role |
+| Library | Purpose |
 |---|---|
-| `sentence-transformers` | Encodes queries into 384-dim vectors using `all-MiniLM-L6-v2` |
-| `faiss-cpu` | Facebook AI Similarity Search — fast ANN retrieval over dense embeddings |
-| `rank-bm25` | BM25Okapi keyword ranking — separate indexes for title and abstract fields |
-| `CrossEncoder` (sentence-transformers) | BERT-based reranker (`ms-marco-MiniLM-L-6-v2`) — full attention over (query, document) |
-| `symspellpy` | O(1) spell correction via SymSpell algorithm; custom dictionary from paper titles |
+| `sentence-transformers` | `all-MiniLM-L6-v2` query/document encoding → 384-dim vectors |
+| `faiss-cpu` | FAISS `IndexFlatL2` — exact L2 ANN search, BLAS-accelerated |
+| `rank-bm25` | `BM25Okapi` — dual field indexes (title × 3.0, abstract × 1.5) |
+| `CrossEncoder` | `ms-marco-MiniLM-L-6-v2` — BERT reranker on (query, document) pairs |
+| `symspellpy` | O(1) spell correction; domain dictionary built from paper titles |
 | `numpy` | Vectorised BM25 score fusion and normalisation |
-| `ujson` | High-speed C-extension JSON parser for large JSONL dataset processing |
+| `ujson` | C-extension JSON parser — significantly faster than stdlib `json` for 1.1M-line JSONL files |
 
-### Backend (Java)
+### Java Backend
 
-| Technology | Role |
+| Library | Purpose |
 |---|---|
-| Spring Boot 3.2 | REST API server, DI, lifecycle management |
+| Spring Boot 3.2 | REST API server, DI, application lifecycle |
 | Spring Data Redis | `@Cacheable` annotation-driven result caching |
-| `grpc-client-spring-boot-starter` | Injects gRPC blocking stubs as Spring beans |
+| `grpc-client-spring-boot-starter` | Injects gRPC blocking stubs as Spring beans via `@GrpcClient` |
 | `protobuf-maven-plugin` | Compiles `search.proto` → Java classes during `mvn package` |
-| Protocol Buffers 3.25.1 + gRPC 1.62.2 | Binary wire format — ~5–10× more efficient than REST/JSON for service-to-service |
-| Lombok | `@Builder`, `@Data` on DTOs |
+| Protocol Buffers 3.25.1 + gRPC 1.62.2 | Binary wire format between services |
+| Lombok | `@Builder`, `@Data` on `PaperDto` |
 
 ### Frontend
 
-| Technology | Role |
+| Library | Purpose |
 |---|---|
 | React 19 + TypeScript 5.9 | Component UI with type-safe API contracts |
-| Vite 7 | Sub-second HMR, native ES module bundling |
-| axios | HTTP client with clean error handling |
+| Vite 7 | Sub-second HMR, ES module-native bundler |
+| axios | HTTP client for REST calls |
 | lucide-react | Lightweight SVG icon set |
-
-### Infrastructure
-
-| Technology | Role |
-|---|---|
-| Docker + Docker Compose 3.8 | All 4 services containerised; one-command startup |
-| Redis 7 Alpine | Minimal-footprint in-memory result cache |
 
 ---
 
 ## Core Features
 
-### Hybrid BM25 + Semantic Search
-Two retrieval signals are fused into a single score:
+### 🔍 Hybrid BM25 + Semantic Search
+Fuses keyword and vector scores into a single ranking signal:
 
 ```
 final_score = normalised_bm25_score + 0.75 × semantic_score
 ```
 
-**BM25 (keyword):** Two separate indexes — title (weight `3.0×`) and abstract (weight `1.5×`). Equivalent to Elasticsearch's `multi_match` with per-field boosting.  
-**Semantic:** Query encoded to 384-dim vector → FAISS ANN search returns 200 nearest neighbours by L2 distance, converted to `1 / (1 + distance)`.  
-**Fusion:** Union of both top-200 sets, scored and pruned to top-100 before reranking.
+Two separate BM25 indexes (title, abstract) with field-level weights — equivalent to Elasticsearch `multi_match` boosting. FAISS returns 200 nearest neighbours; their L2 distances are inverted (`1 / 1 + distance`) to a similarity score. The union of both top-200 sets is fused, sorted, and pruned to top-100 before the expensive reranking step.
 
-### Cross-Encoder Reranking
-Top-100 fused candidates are passed to `ms-marco-MiniLM-L-6-v2`. Unlike a bi-encoder, the cross-encoder sees the entire `(query, title + abstract)` as a single sequence, enabling full cross-attention. This produces substantially more accurate relevance judgements. Cross-encoder scores become the final ranking signal.
+### 🤖 Cross-Encoder Reranking
+After fusion, `ms-marco-MiniLM-L-6-v2` receives each `(query, title + abstract)` pair as a single sequence. Full BERT cross-attention produces a scalar relevance score that is substantially more accurate than bi-encoder cosine similarity. These scores replace the fusion scores as the final ranking signal.
 
-### Spell Correction
-SymSpell runs on every query before any processing. A frequency dictionary is built at startup from all paper titles. Edit distance ≤ 2. Runs in O(1) — constant time regardless of dictionary size.
+### 🔤 Spell Correction
+SymSpell runs on every query before any indexing. A word frequency dictionary is built at startup from all paper titles. Edit distance ≤ 2. Runs in O(1) — constant time regardless of dictionary size.
 
-### Autocomplete / Typeahead
-A prefix trie is built in-memory at startup from all paper titles. Each trie node stores up to 5 suggestions (memory-capped). React debounces calls by 300ms and fetches for queries ≥ 2 characters. Lookup is O(prefix_length).
+### ⌨️ Autocomplete / Typeahead
+A prefix trie is built in-memory at startup from all paper titles, with a maximum of 5 suggestions per node (memory-bounded). React debounces requests by 300ms. Lookup is O(prefix_length).
 
-### Similar Papers
-Clicking "Find Similar" on any result reconstructs that paper's FAISS vector via `index.reconstruct()` (no recomputation), then returns its 10 nearest neighbours by embedding distance.
+### 📄 Similar Papers
+"Find Similar" reconstructs the paper's FAISS vector via `index.reconstruct()` (no re-encoding), then returns 10 nearest neighbours by L2 distance.
 
-### Redis Caching
-Spring `@Cacheable` applied to all three service methods:
-- Search: keyed on `"<query>_<page>"`
-- Autocomplete: keyed on `"<prefix>"`
-- Similar: keyed on `"<paperId>"`
+### ⚡ Redis Caching
+`@Cacheable` applied to all service methods. Search keyed on `"<query>_<page>"`. Cache hits eliminate the entire gRPC call + ML inference stack. Cold: ~200–600ms → Cached: ~1ms.
 
-Cache hits bypass Python gRPC entirely. Latency: ~200–600ms cold → ~1ms cached.
-
-### Pagination
-10 results per page, maximum 10 pages (100 papers per query). 1-based, clamped at both Java controller and Python engine. "Next" auto-disables when fewer than 10 results are returned.
-
----
-
-## Search Pipeline
-
-```
-Query: "bert pretraining language models"
-    │
-    ├─ [1] Spell Correction (SymSpell, max edit distance 2)
-    │
-    ├─ [2] Tokenisation  →  ["bert", "pretraining", "language", "models"]
-    │
-    ├─ [3] BM25 Scoring (NumPy vectorised, all N documents)
-    │       bm25 = 3.0 × title_scores + 1.5 × abstract_scores → normalise → top-200
-    │
-    ├─ [4] Semantic Embedding  →  MiniLM.encode(query) → 384-dim float32 vector
-    │       FAISS.search(vector, k=200) → top-200 nearest neighbours + L2 distances
-    │
-    ├─ [5] Candidate Fusion
-    │       candidates = union(BM25-top-200, FAISS-top-200)
-    │       score = bm25_score + 0.75 × (1 / 1 + L2_distance)
-    │       sort ↓ → take top-100
-    │
-    ├─ [6] Cross-Encoder Reranking
-    │       pairs = [(query, title + abstract)] × 100
-    │       rerank_scores = CrossEncoder.predict(pairs)
-    │       re-sort ↓ by cross-encoder score
-    │
-    └─ [7] Pagination slice  →  reranked[(page-1)×10 : page×10]
-```
-
-| Stage | Algorithm | Time Complexity |
-|---|---|---|
-| BM25 | BM25Okapi (k1=1.5, b=0.75) | O(query_terms × N), NumPy vectorised |
-| FAISS | IndexFlatL2 (exact L2) | O(N × 384), BLAS-accelerated |
-| Fusion | Union + weighted linear combo | O(candidates) |
-| Cross-encoder | BERT bidirectional attention | O(100 × seq_len²) |
-
----
-
-## Dataset & Indexing Pipeline
-
-### Dataset
-| Property | Value |
-|---|---|
-| Source | [arXiv Metadata Snapshot](https://www.kaggle.com/datasets/Cornell-University/arxiv) (OAI-PMH bulk export) |
-| Raw size | ~3 million papers, all academic fields, JSONL format |
-| CS filter | Papers with any `cs.*` category tag |
-| CS subset | ~1.1 million papers |
-| Cloud subset | ~74,000 papers (per-category capped for RAM-limited VMs) |
-| Fields stored | `id`, `title`, `abstract`, `authors[]`, `pdf_url` |
-
-### Processing Pipeline
-
-```
-arxiv-metadata-oai-snapshot.json  (~3M papers)
-               │
-               ▼  dataset/extract_papers.py
-        Filter: categories contains "cs.*"
-        Extract & flatten: id, title, abstract, authors, pdf_url
-               │
-               ▼  papers_cs.jsonl  (~1.1M papers)
-               │
-               ▼  dataset/clean_dataset.py
-        LaTeX token replacement (\alpha → "alpha", \$...\$ removed)
-        LaTeX accent stripping  (\'e → "e")
-        Unicode NFKD normalisation → ASCII
-        Whitespace collapse
-               │
-               ▼  papers_cs_clean.jsonl
-               │
-        ┌──────┴──────────────────────────────────┐
-        ▼  (full server)                          ▼  dataset/filter_dataset_for_aws.py
-   Build full ~1.1M index             Per-category caps (cs.AI: 6K, cs.LG: 6K,
-                                       cs.IR: 5K, cs.DB: 5K, ...) → ~74K papers
-                                       Build cloud-fit index
-               │
-               ▼  Offline index build (run once)
-        bm25_title.pkl      — BM25Okapi over titles
-        bm25_abstract.pkl   — BM25Okapi over abstracts
-        faiss.index         — FAISS IndexFlatL2, 384-dim embeddings
-        docs.pkl            — Serialised list of paper metadata dicts
-```
-
-**CS categories in cloud deployment:** cs.AI, cs.LG, cs.CL, cs.CV, cs.NE, cs.DB, cs.IR, cs.DC, cs.DS, cs.GT, cs.CG, cs.CC, cs.FL, cs.LO, cs.DM, cs.SE, cs.CR, cs.NA
+### 📑 Pagination
+10 results per page, 10 pages max (100 results per query). 1-based, clamped at both API and engine layers. "Next" auto-disables when fewer than 10 results are returned.
 
 ---
 
@@ -227,35 +290,30 @@ arxiv-metadata-oai-snapshot.json  (~3M papers)
 
 | Metric | Value |
 |---|---|
-| Cold query latency | ~200–600ms (BM25 + FAISS + cross-encoder) |
-| Cached query latency | ~1ms (Redis hit) |
+| Cold query latency | ~200–600ms |
+| Cached query latency | ~1ms |
 | FAISS index RAM (74K papers) | ~110 MB |
 | FAISS index RAM (1.1M papers) | ~1.6 GB |
-| Max results per query | 100 (10 pages × 10) |
+| Results per page | 10 |
+| Max results per query | 100 (10 pages) |
 
-**Key optimisations:**
-- Two-stage retrieval: cheap BM25+FAISS first, expensive cross-encoder only on top-100
-- Dual-field BM25 with per-field weights (avoids BM25 length normalisation contamination)
-- SymSpell O(1) spell correction (faster than any edit-distance based alternative)
-- Redis caching eliminates ML inference cost on repeat queries
-- `ujson` C-extension for fast JSONL parsing during dataset processing
+**Two-stage retrieval tradeoff:**  
+Cross-encoder inference is expensive — O(n × seq_len²) BERT computation. By limiting it to the top-100 fused candidates (not all N), the system achieves high reranking quality at a fixed, bounded cost. BM25 + FAISS operate in milliseconds over the full corpus; cross-encoder only runs on the shortlist.
 
 ---
 
 ## Scalability
 
-The architecture is designed to scale horizontally:
-
-| Scale | FAISS Strategy | Notes |
+| Corpus Size | FAISS Strategy | Notes |
 |---|---|---|
 | ~74K papers | `IndexFlatL2` (exact) | Current cloud deployment |
-| ~1.1M CS papers | `IndexFlatL2` on 32GB RAM | Full CS corpus |
+| ~1.1M CS papers | `IndexFlatL2` on 32GB RAM | Full CS corpus target |
 | ~3M+ papers | `IndexIVFPQ` or `IndexHNSWFlat` | ANN with ~95–99% recall, sub-linear search |
 
-- **Python ML service:** Stateless after index load — horizontally scalable behind gRPC load balancer
-- **Java backend:** Fully stateless REST — scale behind Nginx / AWS ALB
+- **Python ML service:** Stateless after index load — horizontally scalable behind a gRPC load balancer
+- **Java backend:** Fully stateless — scale behind Nginx or AWS ALB
 - **Redis:** Drop-in replacement with Redis Cluster or AWS ElastiCache
-- **gRPC contract:** Services evolve independently — only `search.proto` is the coupling point
+- **gRPC contract:** Services evolve independently — only `search.proto` couples them
 
 ---
 
@@ -265,37 +323,38 @@ The architecture is designed to scale horizontally:
 Research_paper_search_engine/
 │
 ├── proto/
-│   └── search.proto                # Shared gRPC schema (SearchRequest, SearchResponse, Paper, ...)
+│   └── search.proto                 # Shared gRPC schema
 │
 ├── search-engine-python/
-│   ├── search_engine.py            # HybridSearchEngine: BM25, FAISS, CrossEncoder, SymSpell, Trie
-│   ├── grpc_server.py              # gRPC server — routes requests to search_engine
-│   └── requirements.txt            # ML dependencies
+│   ├── search_engine.py             # HybridSearchEngine — BM25, FAISS, CrossEncoder,
+│   │                                # SymSpell, Trie, search/similar/autocomplete
+│   ├── grpc_server.py               # gRPC servicer — routes requests to search_engine
+│   └── requirements.txt             # All ML dependencies
 │
 ├── backend-java/
-│   ├── pom.xml                     # Spring Boot 3.2, gRPC, protobuf-maven-plugin
+│   ├── pom.xml                      # Spring Boot 3.2, gRPC, protobuf-maven-plugin
 │   └── src/main/java/com/searchengine/backend/
-│       ├── controller/SearchController.java   # REST endpoints
-│       ├── service/SearchService.java         # Cache + gRPC stub calls
+│       ├── controller/SearchController.java   # /search, /similar/{id}, /autocomplete
+│       ├── service/SearchService.java         # @Cacheable + gRPC stub calls
 │       └── dto/PaperDto.java                  # Lombok response DTO
 │
 ├── frontend/
-│   ├── package.json                # React 19, Vite 7, TypeScript, axios, lucide-react
+│   ├── package.json                 # React 19, Vite 7, TypeScript, axios, lucide-react
 │   └── src/
-│       ├── App.tsx                 # Search, results, pagination, autocomplete, similar papers
-│       └── index.css               # Dark glassmorphism design system + animations
+│       ├── App.tsx                  # Search, results, pagination, autocomplete, similar
+│       └── index.css                # Dark glassmorphism design system + animations
 │
 ├── dataset/
-│   ├── extract_papers.py           # Step 1 — 3M raw → 1.1M CS papers
-│   ├── clean_dataset.py            # Step 2 — LaTeX + unicode cleaning
-│   └── filter_dataset_for_aws.py  # Step 3 — category-capped cloud subset (~74K)
+│   ├── extract_papers.py            # Step 1 — 3M raw → 1.1M CS papers (JSONL)
+│   ├── clean_dataset.py             # Step 2 — LaTeX sanitisation + unicode normalisation
+│   └── filter_dataset_for_aws.py   # Step 3 — category-capped ~74K cloud subset
 │
 ├── docker/
-│   ├── Dockerfile.python           # python:3.11-slim, auto-compiles proto at build time
-│   ├── Dockerfile.java             # Multi-stage Maven build → eclipse-temurin:17-jre
+│   ├── Dockerfile.python            # python:3.11-slim; auto-compiles proto at build time
+│   ├── Dockerfile.java              # Multi-stage: Maven build → eclipse-temurin:17-jre
 │   └── Dockerfile.frontend         # Vite dev server
 │
-└── docker-compose.yml              # Orchestrates redis, python-search-engine, java-backend, frontend
+└── docker-compose.yml               # Orchestrates all 4 services with correct startup order
 ```
 
 ---
@@ -303,16 +362,19 @@ Research_paper_search_engine/
 ## Quick Start
 
 ### Prerequisites
-Build the index files offline (run once after preparing your dataset):
+
+Build the index files offline (once) and place them in `search-engine-python/`:
+
 ```
 bm25_title.pkl
 bm25_abstract.pkl
 faiss.index
 docs.pkl
 ```
-Place them in `search-engine-python/`. These are excluded from git due to size.
 
-### Run Everything
+> These files are excluded from git (`.gitignore`) due to their size (~GB range for the full corpus).
+
+### Run with Docker
 
 ```bash
 docker compose up --build
@@ -322,8 +384,8 @@ docker compose up --build
 |---|---|
 | Frontend | http://localhost:3000 |
 | Java REST API | http://localhost:8080 |
-| Python gRPC Engine | localhost:50051 (internal) |
-| Redis | localhost:6379 (internal) |
+| Python gRPC Engine | `localhost:50051` (internal) |
+| Redis | `localhost:6379` (internal) |
 
 ### Run Without Docker
 
@@ -351,23 +413,23 @@ npm run dev
 
 ---
 
-## API Endpoints
+## API Reference
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/search?q={query}&page={n}` | Search papers — page 1–10, 10 results per page |
-| `GET` | `/similar/{paperId}` | Find 10 semantically similar papers |
-| `GET` | `/autocomplete?q={prefix}` | Get up to 5 title suggestions |
+| `GET` | `/search?q={query}&page={n}` | Paginated search — page 1–10, 10 results each |
+| `GET` | `/similar/{paperId}` | 10 papers semantically similar to the given arXiv ID |
+| `GET` | `/autocomplete?q={prefix}` | Up to 5 paper title suggestions |
 
 ---
 
-## gRPC Contract (`proto/search.proto`)
+## gRPC Contract
 
 ```protobuf
 service SearchService {
-  rpc Search      (SearchRequest)     returns (SearchResponse);
-  rpc Similar     (SimilarRequest)    returns (SearchResponse);
-  rpc Autocomplete(AutocompleteRequest) returns (AutocompleteResponse);
+  rpc Search       (SearchRequest)      returns (SearchResponse);
+  rpc Similar      (SimilarRequest)     returns (SearchResponse);
+  rpc Autocomplete (AutocompleteRequest) returns (AutocompleteResponse);
 }
 
 message SearchRequest {
@@ -377,24 +439,39 @@ message SearchRequest {
 }
 
 message Paper {
-  string id       = 1;
-  string title    = 2;
-  string abstract = 3;
-  repeated string authors = 4;
-  string pdf_url  = 5;
+  string          id       = 1;
+  string          title    = 2;
+  string          abstract = 3;
+  repeated string authors  = 4;
+  string          pdf_url  = 5;
 }
 ```
 
-The `.proto` schema is compiled automatically inside Docker containers — no manual `protoc` invocation needed.
+The `.proto` schema is compiled **automatically inside Docker containers** at build time — no manual `protoc` invocation needed.
 
 ---
 
-## Implementation Highlights
+## Future Improvements
 
-- **Zero-copy gRPC transport** between Java and Python — binary Protobuf encoding, ~5–10× faster than REST/JSON
-- **Retrieve-then-rerank pipeline** mirrors production search systems (DPR, ColBERT, Elasticsearch ONNX rerankers)
-- **Dual-field BM25** with separate title/abstract indexes and learned field weights
-- **SymSpell O(1) spell correction** using a domain-specific dictionary built from paper titles
-- **In-memory trie** with per-node suggestion cap for memory-bounded autocomplete at 1.1M+ title scale
-- **Multi-stage Dockerfile** for Java (Maven build image → lean JRE runtime image)
-- **Automatic proto compilation** in both Python and Java containers at build time
+- **ANN indexing** — Replace `IndexFlatL2` with `IndexHNSWFlat` or `IndexIVFPQ` for sub-linear search over 1M+ papers with ≥95% recall
+- **GPU acceleration** — FAISS `IndexFlatL2` on GPU (CUDA) for faster batch embedding and search
+- **LLM query expansion** — Use an LLM to expand short queries before retrieval, improving recall on ambiguous queries
+- **Learning-to-rank** — Replace the cross-encoder with a supervised LTR model trained on user click data
+- **Citation graph search** — Add a graph index (Neo4j / NetworkX) to surface papers by citation proximity, not just text similarity
+- **Streaming results** — Replace polling with server-sent events or WebSocket for progressive result loading
+- **Kubernetes / AWS ECS** — Deploy with Kubernetes HPA or ECS Fargate for auto-scaled, cloud-native hosting
+- **Query analytics dashboard** — Track popular queries, cache hit rates, and latency percentiles
+
+---
+
+## Engineering Highlights
+
+| Aspect | Detail |
+|---|---|
+| **Retrieve-then-rerank** | Same two-stage architecture as DPR (Facebook Research), ColBERT, and Elasticsearch ONNX rerankers |
+| **Cross-language gRPC** | Shared `.proto` schema auto-generates Python server stubs and Java client stubs — compile-time contract enforcement |
+| **Dual-field BM25** | Separate BM25 indexes per field with tunable weights avoids BM25 length-normalisation contamination across fields |
+| **Bounded trie autocomplete** | 5-suggestion per-node cap keeps memory usage sub-100MB over 1.1M titles |
+| **SymSpell over NLTK** | O(1) spell correction vs O(n) for edit-distance algorithms — critical for low-latency query preprocessing |
+| **Multi-stage Docker (Java)** | Maven build image → lean JRE runtime image; final image contains no SDK or build tools |
+| **Automatic proto compilation** | `grpc_tools.protoc` runs inside the Python container at `docker build` time; `protobuf-maven-plugin` runs during `mvn package` — zero manual setup |
