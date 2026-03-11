@@ -6,7 +6,6 @@
 dataset/*
 !dataset/*.py
 
-bm25.pkl
 faiss.index
 docs.pkl
 bm25_title.pkl
