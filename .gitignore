@@ -2,7 +2,9 @@
 # DATASETS & INDEXES (VERY IMPORTANT)
 ############################################
 
-dataset
+
+dataset/*
+!dataset/*.py
 
 bm25.pkl
 faiss.index
