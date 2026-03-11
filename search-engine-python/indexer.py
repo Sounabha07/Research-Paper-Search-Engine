@@ -72,6 +72,7 @@ def build_indexes():
             docs.append({
                 "id": paper.get("id"),
                 "title": title,
+                "abstract": abstract,
                 "authors": paper.get("authors"),
                 "pdf_url": paper.get("pdf_url")
             })

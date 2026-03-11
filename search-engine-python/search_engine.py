@@ -107,7 +107,7 @@ class HybridSearchEngine:
             output.append({
                 "id": doc.get("id"),
                 "title": doc.get("title"),
-                "abstract": doc.get("abstractText", ""),
+                "abstract": doc.get("abstract", ""),
                 "authors": doc.get("authors", []),
                 "score": float(score)
             })
@@ -138,7 +138,7 @@ class HybridSearchEngine:
 
         except Exception:
 
-            text = f"{self.docs[target_idx]['title']} {self.docs[target_idx].get('abstractText','')}"
+            text = f"{self.docs[target_idx]['title']} {self.docs[target_idx].get('abstract','')}"
             vec = self.model.encode([text], convert_to_numpy=True)
 
         D, I = self.index.search(vec, top_k + 1)
@@ -155,7 +155,7 @@ class HybridSearchEngine:
             results.append({
                 "id": doc.get("id"),
                 "title": doc.get("title"),
-                "abstract": doc.get("abstractText", ""),
+                "abstract": doc.get("abstract", ""),
                 "authors": doc.get("authors", [])
             })
 
