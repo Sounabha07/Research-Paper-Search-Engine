@@ -11,7 +11,8 @@ from sentence_transformers import SentenceTransformer
 
 
 DATASET_PATH = "../dataset/cs_focused_dataset_clean.jsonl"
-BM25_INDEX_PATH = "bm25.pkl"
+BM25_TITLE_PATH = "bm25_title.pkl"
+BM25_ABSTRACT_PATH = "bm25_abstract.pkl"
 FAISS_INDEX_PATH = "faiss.index"
 DOCS_PATH = "docs.pkl"
 
@@ -43,7 +44,8 @@ def build_indexes():
     index.hnsw.efSearch = 64
 
     docs = []
-    tokenized_docs = []
+    tokenized_titles = []
+    tokenized_abstracts = []
 
     batch_texts = []
 
@@ -67,7 +69,7 @@ def build_indexes():
             title = paper.get("title", "")
             abstract = paper.get("abstract", "")
 
-            text = f"{title} {title} {abstract}"
+            text = f"{title} {abstract}"
 
             docs.append({
                 "id": paper.get("id"),
@@ -77,7 +79,8 @@ def build_indexes():
                 "pdf_url": paper.get("pdf_url")
             })
 
-            tokenized_docs.append(tokenize(text))
+            tokenized_titles.append(tokenize(title))
+            tokenized_abstracts.append(tokenize(abstract))
 
             batch_texts.append(text)
 
@@ -109,14 +112,19 @@ def build_indexes():
 
         index.add(embeddings)
 
-    print("Building BM25 index...")
+    print("Building BM25 title index...")
+    bm25_title = BM25Okapi(tokenized_titles)
 
-    bm25 = BM25Okapi(tokenized_docs)
+    with open(BM25_TITLE_PATH, "wb") as f:
+        pickle.dump(bm25_title, f)
+    print("Saved BM25 title index.")
 
-    with open(BM25_INDEX_PATH, "wb") as f:
-        pickle.dump(bm25, f)
+    print("Building BM25 abstract index...")
+    bm25_abstract = BM25Okapi(tokenized_abstracts)
 
-    print("Saved BM25 index.")
+    with open(BM25_ABSTRACT_PATH, "wb") as f:
+        pickle.dump(bm25_abstract, f)
+    print("Saved BM25 abstract index.")
 
     print("Saving FAISS index...")
 

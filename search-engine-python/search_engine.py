@@ -13,13 +13,18 @@ def tokenize(text: str):
 class HybridSearchEngine:
 
     def __init__(self,
-                 bm25_path="bm25.pkl",
+                 bm25_title_path="bm25_title.pkl",
+                 bm25_abstract_path="bm25_abstract.pkl",
                  faiss_path="faiss.index",
                  docs_path="docs.pkl"):
 
-        print("Loading BM25 index...")
-        with open(bm25_path, "rb") as f:
-            self.bm25 = pickle.load(f)
+        print("Loading BM25 title index...")
+        with open(bm25_title_path, "rb") as f:
+            self.bm25_title = pickle.load(f)
+
+        print("Loading BM25 abstract index...")
+        with open(bm25_abstract_path, "rb") as f:
+            self.bm25_abstract = pickle.load(f)
 
         print("Loading FAISS index...")
         self.index = faiss.read_index(faiss_path)
@@ -82,8 +87,11 @@ class HybridSearchEngine:
 
         query_tokens = tokenize(query)
 
-        # BM25
-        bm25_scores = self.bm25.get_scores(query_tokens)
+        # Field-weighted BM25
+        title_scores = self.bm25_title.get_scores(query_tokens)
+        abstract_scores = self.bm25_abstract.get_scores(query_tokens)
+
+        bm25_scores = 3.0 * title_scores + 1.5 * abstract_scores
 
         max_score = np.max(bm25_scores) + 1e-9
         bm25_scores = bm25_scores / max_score
@@ -213,6 +221,12 @@ class HybridSearchEngine:
     # --------------------------------------------------
 
     def autocomplete(self, prefix: str):
+
+        # Apply spell correction to handle typos
+        suggestions = self.sym_spell.lookup(prefix, verbosity=0)
+
+        if suggestions:
+            prefix = suggestions[0].term
 
         node = self.trie
 
