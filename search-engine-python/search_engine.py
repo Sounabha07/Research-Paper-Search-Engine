@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 import faiss
 import re
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 
 def tokenize(text: str):
@@ -47,6 +47,9 @@ class HybridSearchEngine:
 
         print("Loading embedding model...")
         self.model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        print("Loading cross-encoder reranker...")
+        self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
         print("Search engine ready.")
 
@@ -98,9 +101,29 @@ class HybridSearchEngine:
 
         results.sort(reverse=True)
 
+        # Take top 100 candidates for cross-encoder reranking
+        top_candidates = results[:100]
+
+        pairs = []
+        candidate_indices = []
+
+        for score, idx in top_candidates:
+            doc = self.docs[idx]
+            text = (doc.get("title", "") + " " + doc.get("abstract", "")).strip()
+            pairs.append((query, text))
+            candidate_indices.append(idx)
+
+        # Cross-encoder reranking
+        rerank_scores = self.reranker.predict(pairs)
+
+        reranked = sorted(
+            zip(rerank_scores, candidate_indices),
+            reverse=True
+        )
+
         output = []
 
-        for score, idx in results[:top_k]:
+        for score, idx in reranked[:top_k]:
 
             doc = self.docs[idx]
 
@@ -212,7 +235,7 @@ if __name__ == "__main__":
 
             print("Authors:", authors if authors else "Unknown")
 
-            print("Abstract:", r["abstractText"][:200], "...")
+            print("Abstract:", r.get("abstract", "")[:200], "...")
 
             print("PDF:", f"https://arxiv.org/pdf/{r['id']}.pdf")
 
