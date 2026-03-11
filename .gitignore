@@ -7,6 +7,8 @@ dataset
 bm25.pkl
 faiss.index
 docs.pkl
+bm25_title.pkl
+bm25_abstract.pkl
 
 ############################################
 # PYTHON

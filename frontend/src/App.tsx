@@ -17,6 +17,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<Paper[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [page, setPage] = useState(1);
+  const [lastQuery, setLastQuery] = useState('');
 
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -71,41 +73,47 @@ export default function App() {
 
   }, [query]);
 
-  const handleSearch = async (searchQuery: string) => {
-
-
+  const fetchResults = async (searchQuery: string, pageNum: number) => {
     if (!searchQuery.trim()) return;
 
     setLoading(true);
     setError(null);
     setHasSearched(true);
     setShowSuggestions(false);
-    setQuery(searchQuery);
 
     try {
-
       const response = await axios.get<Paper[]>(
-        `http://localhost:8080/search?q=${encodeURIComponent(searchQuery)}`
+        `http://localhost:8080/search?q=${encodeURIComponent(searchQuery)}&page=${pageNum}`
       );
-
       setData(response.data);
-
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-
       setError(
         err.response?.data?.message ||
         err.message ||
         "Error fetching results"
       );
-
       setData([]);
-
     } finally {
       setLoading(false);
     }
-
-
   };
+
+  const handleSearch = async (searchQuery: string) => {
+    if (!searchQuery.trim()) return;
+    setQuery(searchQuery);
+    setLastQuery(searchQuery);
+    setPage(1);
+    await fetchResults(searchQuery, 1);
+  };
+
+  // Refetch when page changes (but only after the first search)
+  useEffect(() => {
+    if (lastQuery) {
+      fetchResults(lastQuery, page);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   const handleFetchSimilar = async (paperId: string) => {
 
@@ -165,7 +173,7 @@ export default function App() {
         <Sparkles className="logo-icon" />
         <h1 className="title">NeuralSeek Engine</h1>
         <p className="subtitle">
-          Discover state-of-the-art research papers with hybrid BM25 + semantic search
+          Discover state-of-the-art computer science research papers with hybrid search
         </p>
       </header>
 
@@ -292,7 +300,7 @@ export default function App() {
           <div className="results-container">
 
             <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-              Found {data.length} results
+              Page {page} &mdash; Showing {data.length} result{data.length !== 1 ? 's' : ''}
             </p>
 
             {data.map((paper, index) => (
@@ -355,6 +363,27 @@ export default function App() {
               </div>
 
             ))}
+
+            {/* Pagination controls */}
+            <div className="pagination">
+              <button
+                className="pagination-btn"
+                disabled={page === 1 || loading}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+              >
+                ← Previous
+              </button>
+
+              <span className="pagination-info">Page {page} of 10</span>
+
+              <button
+                className="pagination-btn"
+                disabled={page === 10 || loading || data.length < 10}
+                onClick={() => setPage(p => Math.min(10, p + 1))}
+              >
+                Next →
+              </button>
+            </div>
 
           </div>
 

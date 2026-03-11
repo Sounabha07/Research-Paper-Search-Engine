@@ -24,12 +24,18 @@ public class SearchController {
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<PaperDto>> search(@RequestParam("q") String query) {
+    public ResponseEntity<List<PaperDto>> search(
+            @RequestParam("q") String query,
+            @RequestParam(value = "page", defaultValue = "1") int page) {
         if (query == null || query.trim().isEmpty()) {
             return ResponseEntity.ok(Collections.emptyList());
         }
 
-        List<PaperDto> results = searchService.searchPapers(query);
+        // Clamp page to [1, 10]
+        if (page < 1) page = 1;
+        if (page > 10) page = 10;
+
+        List<PaperDto> results = searchService.searchPapers(query, page);
         return ResponseEntity.ok(results);
     }
 

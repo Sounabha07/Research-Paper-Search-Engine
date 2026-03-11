@@ -75,7 +75,7 @@ class HybridSearchEngine:
     # HYBRID SEARCH
     # --------------------------------------------------
 
-    def search(self, query: str, top_k: int = 10):
+    def search(self, query: str, page: int = 1, size: int = 10):
 
         # Spell correction
         suggestions = self.sym_spell.lookup_compound(query, max_edit_distance=2)
@@ -150,9 +150,18 @@ class HybridSearchEngine:
             reverse=True
         )
 
+        # Pagination (1-based, clamped to [1, 10])
+        if page < 1:
+            page = 1
+        if page > 10:
+            page = 10
+        size = 10
+        start = (page - 1) * size
+        end = start + size
+
         output = []
 
-        for score, idx in reranked[:top_k]:
+        for score, idx in reranked[start:end]:
 
             doc = self.docs[idx]
 
@@ -255,7 +264,7 @@ if __name__ == "__main__":
         if not query:
             break
 
-        results = engine.search(query, top_k=5)
+        results = engine.search(query, page=1)
 
         print("\nTop Results:\n")
 
