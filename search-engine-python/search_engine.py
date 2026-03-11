@@ -3,6 +3,7 @@ import numpy as np
 import faiss
 import re
 from sentence_transformers import SentenceTransformer, CrossEncoder
+from symspellpy import SymSpell, Verbosity
 
 
 def tokenize(text: str):
@@ -51,6 +52,18 @@ class HybridSearchEngine:
         print("Loading cross-encoder reranker...")
         self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
+        print("Building spell correction dictionary...")
+        self.sym_spell = SymSpell(max_dictionary_edit_distance=2)
+
+        # Build frequency dictionary from paper titles
+        word_freq = {}
+        for doc in self.docs:
+            for word in tokenize(doc.get("title", "")):
+                word_freq[word] = word_freq.get(word, 0) + 1
+
+        for word, freq in word_freq.items():
+            self.sym_spell.create_dictionary_entry(word, freq)
+
         print("Search engine ready.")
 
     # --------------------------------------------------
@@ -58,6 +71,14 @@ class HybridSearchEngine:
     # --------------------------------------------------
 
     def search(self, query: str, top_k: int = 10):
+
+        # Spell correction
+        suggestions = self.sym_spell.lookup_compound(query, max_edit_distance=2)
+        if suggestions:
+            corrected = suggestions[0].term
+            if corrected != query.lower():
+                print(f"Spell corrected: '{query}' → '{corrected}'")
+                query = corrected
 
         query_tokens = tokenize(query)
 
