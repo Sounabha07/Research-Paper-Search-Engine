@@ -440,53 +440,23 @@ npm run dev
 
 ---
 
-## Cloud Deployment
+## Deployment
 
-The project is fully configured for deployment on any Linux cloud VM (Oracle Cloud, AWS, DigitalOcean, Hetzner, etc.).
+The system is fully containerized using Docker Compose and runs locally with the full arXiv Computer Science dataset (~1.1M papers).
 
-### Recommended VM Specs
+The architecture includes multiple services:
 
-| Resource | Minimum | Recommended |
-|---|---|---|
-| RAM | 3 GB | 4 GB |
-| Storage | 12 GB | 20 GB |
-| vCPUs | 2 | 2+ |
+* Python search engine (FAISS + BM25 hybrid retrieval)
+* Java Spring Boot backend
+* Redis cache
+* React frontend
+* Docker Compose orchestration
 
-### Deploy
+Cloud deployment was attempted on Oracle Cloud Free Tier, but the available 1 GB RAM instance was insufficient to run all services (FAISS + BM25 + Redis + Java backend) simultaneously.
 
-```bash
-# 1. SSH into your VM
-ssh user@<VM_PUBLIC_IP>
+Due to memory constraints of the free-tier environment, the full system is demonstrated locally with the complete dataset, while the containerized architecture is designed to scale on higher-memory cloud instances.
 
-# 2. Install Docker
-sudo apt update && sudo apt install -y docker.io docker-compose-plugin
-sudo usermod -aG docker $USER && newgrp docker
-
-# 3. Clone the project and upload index files to search-engine-python/
-
-# 4. Create .env file in project root
-echo "VITE_API_URL=http://<YOUR_PUBLIC_IP>:8080" > .env
-
-# 5. Open firewall ports (OS + cloud security group)
-sudo ufw allow 3000/tcp
-sudo ufw allow 8080/tcp
-
-# 6. Build and start
-docker compose up -d --build
-
-# 7. Access
-# http://<YOUR_PUBLIC_IP>:3000
-```
-
-### Environment Variables
-
-| Variable | Where | Default | Purpose |
-|---|---|---|---|
-| `VITE_API_URL` | `.env` file (project root) | `http://localhost:8080` | Frontend API endpoint (baked at Docker build time) |
-| `SPRING_REDIS_HOST` | `docker-compose.yml` | `redis` | Redis container hostname |
-| `SPRING_REDIS_PORT` | `docker-compose.yml` | `6379` | Redis port |
-
-> **Important:** `VITE_API_URL` is injected at **build time** via Docker build args. If you change it, you must rebuild the frontend image: `docker compose build frontend`.
+The project is fully deployable on any cloud VM with sufficient RAM (recommended ≥ 4–8 GB).
 
 ---
 
