@@ -13,7 +13,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=for-the-badge&logo=redis&logoColor=white)
 ![gRPC](https://img.shields.io/badge/gRPC-Protobuf-244C5A?style=for-the-badge&logo=google&logoColor=white)
-![Nginx](https://img.shields.io/badge/Nginx-Alpine-009639?style=for-the-badge&logo=nginx&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-009639?style=for-the-badge&logo=nginx&logoColor=white)
 
 </div>
 
@@ -277,7 +277,7 @@ Vectors are L2-normalised before insertion. HNSW provides sub-linear approximate
 |---|---|
 | React 19 + TypeScript 5.9 | Component UI with type-safe API contracts |
 | Vite 7 | ES module bundler — builds production assets |
-| Nginx (Alpine) | Production static file server with gzip and SPA fallback |
+| Nginx | Production static file server with gzip and SPA fallback |
 | axios | HTTP client for REST calls |
 | lucide-react | Lightweight SVG icon set |
 
@@ -286,7 +286,7 @@ Vectors are L2-normalised before insertion. HNSW provides sub-linear approximate
 | Tool | Purpose |
 |---|---|
 | Docker Compose | Multi-service orchestration with dependency ordering |
-| Nginx | Frontend production server (gzip, SPA routing, port 3000) |
+| Nginx | Frontend production server with gzip compression and SPA routing |
 | Redis 7 (Alpine) | Cache layer with healthcheck |
 | gRPC + Protobuf | Cross-language inter-service communication |
 
