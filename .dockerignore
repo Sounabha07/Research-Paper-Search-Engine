@@ -1,18 +1,8 @@
-# ignore datasets
+# ignore datasets (large source files, not needed at runtime)
 dataset/
 
-# ignore indexes
-search-engine-python/faiss.index
-search-engine-python/bm25.pkl
-search-engine-python/docs.pkl
-search-engine-python/indexer.py
-search-engine-python/bm25_title.pkl
-search-engine-python/bm25_abstract.pkl
-
-# ignore generated data
+# ignore generated data files (but NOT in search-engine-python/)
 *.jsonl
-*.pkl
-*.index
 
 # frontend stuff
 frontend/node_modules/

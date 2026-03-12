@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Search, BookOpen, User, Calendar, ExternalLink, Loader2, AlertCircle, Sparkles, Link } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+
 interface Paper {
   id: string;
   title: string;
@@ -56,7 +58,7 @@ export default function App() {
       try {
 
         const response = await axios.get<string[]>(
-          `http://localhost:8080/autocomplete?q=${encodeURIComponent(query)}`
+          `${API_BASE}/autocomplete?q=${encodeURIComponent(query)}`
         );
 
         setSuggestions(response.data);
@@ -83,7 +85,7 @@ export default function App() {
 
     try {
       const response = await axios.get<Paper[]>(
-        `http://localhost:8080/search?q=${encodeURIComponent(searchQuery)}&page=${pageNum}`
+        `${API_BASE}/search?q=${encodeURIComponent(searchQuery)}&page=${pageNum}`
       );
       setData(response.data);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -125,7 +127,7 @@ export default function App() {
     try {
 
       const response = await axios.get<Paper[]>(
-        `http://localhost:8080/similar/${paperId}`
+        `${API_BASE}/similar/${paperId}`
       );
 
       setData(response.data);
