@@ -6,28 +6,28 @@ output_file = "cs_focused_dataset.jsonl"
 
 # category limits
 limits = {
-    "cs.AI": 6000,
-    "cs.LG": 6000,
-    "cs.CL": 4000,
-    "cs.CV": 4000,
-    "cs.NE": 3000,
+    "cs.AI": 600,
+    "cs.LG": 600,
+    "cs.CL": 400,
+    "cs.CV": 400,
+    "cs.NE": 300,
 
-    "cs.DB": 5000,
-    "cs.IR": 5000,
-    "cs.DC": 4000,
+    "cs.DB": 500,
+    "cs.IR": 500,
+    "cs.DC": 400,
 
-    "cs.DS": 6000,
-    "cs.GT": 3000,
-    "cs.CG": 3000,
+    "cs.DS": 600,
+    "cs.GT": 300,
+    "cs.CG": 300,
 
-    "cs.CC": 4000,
-    "cs.FL": 3000,
-    "cs.LO": 3000,
-    "cs.DM": 4000,
+    "cs.CC": 400,
+    "cs.FL": 300,
+    "cs.LO": 300,
+    "cs.DM": 400,
 
-    "cs.SE": 4000,
-    "cs.CR": 4000,
-    "cs.NA": 3000
+    "cs.SE": 400,
+    "cs.CR": 400,
+    "cs.NA": 300
 }
 
 counts = defaultdict(int)

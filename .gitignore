@@ -4,7 +4,6 @@
 
 
 dataset/*
-!dataset/*.py
 
 faiss.index
 docs.pkl
