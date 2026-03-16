@@ -4,6 +4,11 @@ dataset/
 # ignore generated data files (but NOT in search-engine-python/)
 *.jsonl
 
+# ignore index files (loaded via volume mount at runtime)
+search-engine-python/*.pkl
+search-engine-python/*.index
+search-engine-python/data
+
 # frontend stuff
 frontend/node_modules/
 

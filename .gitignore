@@ -5,10 +5,7 @@
 
 dataset/*
 
-faiss.index
-docs.pkl
-bm25_title.pkl
-bm25_abstract.pkl
+data/shards/
 
 ############################################
 # PYTHON

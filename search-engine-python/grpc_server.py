@@ -1,6 +1,7 @@
 import grpc
 from concurrent import futures
 import time
+import os
 
 # Auto-generated gRPC code from protobuf
 import search_pb2
@@ -12,11 +13,12 @@ class SearchServiceServicer(search_pb2_grpc.SearchServiceServicer):
     def __init__(self):
         # Initialize search engine upon server start
         print("Starting gRPC server... Initializing Search Engine...")
+        
+        # Use environment variable or default to /data/shards
+        shards_dir = os.environ.get("SHARDS_DIR", "/data/shards")
+        
         self.engine = HybridSearchEngine(
-            bm25_title_path="bm25_title.pkl",
-            bm25_abstract_path="bm25_abstract.pkl",
-            faiss_path="faiss.index",
-            docs_path="docs.pkl"
+            shards_dir=shards_dir
         )
         print("Search Engine Initialized.")
 

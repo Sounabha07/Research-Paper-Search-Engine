@@ -6,3 +6,5 @@ grpcio-tools
 numpy
 ujson
 symspellpy
+tqdm
+torch

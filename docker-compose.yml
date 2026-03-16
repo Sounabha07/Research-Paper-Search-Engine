@@ -1,4 +1,4 @@
-services:
+SERVICES:
 
   redis:
     image: redis:7-alpine
@@ -20,8 +20,25 @@ services:
     restart: unless-stopped
     ports:
       - "50051:50051"
+    volumes:
+      - ./data/shards:/data/shards
     environment:
       - PYTHONUNBUFFERED=1
+      - SHARDS_DIR=/data/shards
+      # - USE_GPU=1  # Uncomment to enable optional GPU support for FAISS
+    # Optional GPU Config:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Memory Limits:
+    deploy:
+      resources:
+        limits:
+          memory: 12g
     depends_on:
       - redis
 

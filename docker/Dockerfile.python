@@ -8,8 +8,8 @@ WORKDIR /app
 COPY search-engine-python/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy python code
-COPY search-engine-python/ /app/
+# copy python source code only
+COPY search-engine-python/*.py /app/
 
 # copy proto file
 COPY proto/ /proto/
