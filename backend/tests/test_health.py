@@ -42,3 +42,24 @@ def test_ready_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["status"] == "degraded"
     assert body["checks"]["b"]["ok"] is False
     assert body["checks"]["b"]["detail"] == "RuntimeError: down"
+
+
+async def test_admin_stats_is_cached_and_single_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from app.routers import admin
+
+    calls = 0
+
+    async def fake_compute() -> object:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        return object()
+
+    monkeypatch.setattr(admin, "_compute_stats", fake_compute)
+    monkeypatch.setattr(admin, "_stats_cache", None)
+    monkeypatch.setattr(admin, "_stats_lock", asyncio.Lock())
+    results = await asyncio.gather(*(admin.stats() for _ in range(5)))
+    assert calls == 1
+    assert all(r is results[0] for r in results)

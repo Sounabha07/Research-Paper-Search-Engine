@@ -16,7 +16,18 @@ make up                # build, start infra, migrate, start everything
 make status            # health of every service
 ```
 
-- Frontend: http://localhost:3000
-- API: http://localhost:8000 (`/health`, `/health/ready`, `/docs`)
+- Frontend: http://localhost:3000 (admin dashboard at `/admin`)
+- API: http://localhost:8000 (`/health`, `/health/ready`, `/admin/stats`, `/docs`)
+
+## Loading the corpus metadata
+
+```bash
+make ingest-metadata   # download/refresh the Kaggle arXiv snapshot, load tier 1, print counts, score
+make embed             # abstract embeddings on the GPU, then build the vector index
+```
+
+`make ingest-metadata ARGS=--dry-run` streams the snapshot and prints the counts without writing anything.
+`make score` recomputes scores on its own. The first full load takes a few hours on a laptop; later runs
+only touch new or changed papers.
 
 All data lives under `DATA_DIR` (default `./data`) and never goes in the repo.

@@ -40,3 +40,13 @@ def test_unknown_key_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_landmarks_file_exists(cfg: AppConfig) -> None:
     assert (REPO_ROOT / cfg.corpus.landmarks_file).is_file()
+
+
+def test_paper_index_definitions_match_migration() -> None:
+    from ingest.indexes import PAPER_INDEXES
+
+    migration = (REPO_ROOT / "backend" / "migrations" / "versions" / "0001_initial.py").read_text(encoding="utf-8")
+    flat = " ".join(migration.replace('"\n    "', "").split())
+    for name, ddl in PAPER_INDEXES.items():
+        body = ddl.replace("IF NOT EXISTS ", "")
+        assert " ".join(body.split()) in flat, name

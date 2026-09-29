@@ -15,6 +15,12 @@ dependencies = [
     "arq>=0.26",
     "httpx>=0.27",
     "google-genai>=1.50",
+    "orjson>=3.10",
+    "numpy>=1.26",
+    "pgvector>=0.3",
+    "kaggle>=1.7",
+    "torch>=2.4",
+    "sentence-transformers>=3.0",
 ]
 
 [dependency-groups]
@@ -48,5 +54,5 @@ plugins = ["pydantic.mypy"]
 exclude = ["migrations/versions/"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*"]
+module = ["arq.*", "asyncpg.*", "sentence_transformers.*", "kaggle.*"]
 ignore_missing_imports = true

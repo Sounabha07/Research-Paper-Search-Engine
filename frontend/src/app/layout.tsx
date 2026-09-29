@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -35,7 +36,19 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-full flex flex-col bg-background text-foreground">{children}</body>
+      <body className="min-h-full flex flex-col bg-background text-foreground">
+        <nav className="border-b border-border">
+          <div className="mx-auto flex max-w-5xl items-center gap-5 px-4 py-2.5 text-sm">
+            <Link href="/" className="font-semibold tracking-tight">
+              arXiv Research Engine
+            </Link>
+            <Link href="/admin" className="text-muted-foreground hover:text-foreground">
+              Admin
+            </Link>
+          </div>
+        </nav>
+        {children}
+      </body>
     </html>
   );
 }

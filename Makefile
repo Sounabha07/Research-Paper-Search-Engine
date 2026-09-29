@@ -11,7 +11,8 @@ BACKEND := $(COMPOSE) run --rm --no-deps api
 help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"
 	@echo "backup | restore FILE=<name>.dump"
-	@echo "ingest-metadata | landmarks | warm TOPIC=... | score | embed | nightly | eval  (later milestones)"
+	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
+	@echo "landmarks | warm TOPIC=... | nightly | eval  (later milestones)"
 
 up:
 	$(COMPOSE) up -d --build postgres redis grobid
@@ -52,11 +53,19 @@ ifndef FILE
 endif
 	$(COMPOSE) exec -T postgres pg_restore -U arxiv -d arxiv --clean --if-exists --no-owner /backups/$(FILE)
 
-ingest-metadata landmarks score embed:
-	@echo "make $@ arrives in milestone 2" && exit 1
+# Metadata pass: download/refresh the Kaggle snapshot, stream it, load tier 1, print counts, score.
+# ARGS="--dry-run" counts only; ARGS="--skip-download" reuses the zip in DATA_DIR/raw.
+ingest-metadata:
+	$(COMPOSE) run --rm worker python -m ingest.metadata $(ARGS)
 
-warm:
-	@echo "make warm arrives in milestone 3" && exit 1
+score:
+	$(COMPOSE) run --rm worker python -m ingest.scores
+
+embed:
+	$(COMPOSE) run --rm worker python -m ingest.abstract_embed
+
+landmarks warm:
+	@echo "make $@ arrives in milestone 3" && exit 1
 
 nightly eval:
 	@echo "make $@ arrives in milestone 8" && exit 1
