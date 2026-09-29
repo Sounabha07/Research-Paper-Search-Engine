@@ -1,0 +1,118 @@
+# Curated landmark papers (CS + math). Always included in tier 1 and prefetched as full text.
+# IDs were compiled by hand. The pipeline must validate each entry against the
+# Kaggle metadata (fuzzy title match) and log + skip any mismatch instead of guessing.
+papers:
+  # Deep learning foundations
+  - {id: "1706.03762", title: "Attention Is All You Need"}
+  - {id: "1412.6980", title: "Adam: A Method for Stochastic Optimization"}
+  - {id: "1512.03385", title: "Deep Residual Learning for Image Recognition"}
+  - {id: "1502.03167", title: "Batch Normalization"}
+  - {id: "1607.06450", title: "Layer Normalization"}
+  - {id: "1606.08415", title: "Gaussian Error Linear Units (GELUs)"}
+  - {id: "1711.05101", title: "Decoupled Weight Decay Regularization"}
+  - {id: "1409.0473", title: "Neural Machine Translation by Jointly Learning to Align and Translate"}
+  - {id: "1409.1556", title: "Very Deep Convolutional Networks for Large-Scale Image Recognition"}
+  - {id: "1409.4842", title: "Going Deeper with Convolutions"}
+  - {id: "1301.3781", title: "Efficient Estimation of Word Representations in Vector Space"}
+  - {id: "1406.2661", title: "Generative Adversarial Networks"}
+  - {id: "1312.6114", title: "Auto-Encoding Variational Bayes"}
+  - {id: "1503.02531", title: "Distilling the Knowledge in a Neural Network"}
+  - {id: "1611.03530", title: "Understanding deep learning requires rethinking generalization"}
+  - {id: "1701.06538", title: "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer"}
+  - {id: "1604.06174", title: "Training Deep Nets with Sublinear Memory Cost"}
+  # Language models
+  - {id: "1810.04805", title: "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"}
+  - {id: "1907.11692", title: "RoBERTa: A Robustly Optimized BERT Pretraining Approach"}
+  - {id: "1910.10683", title: "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"}
+  - {id: "2005.14165", title: "Language Models are Few-Shot Learners"}
+  - {id: "2001.08361", title: "Scaling Laws for Neural Language Models"}
+  - {id: "2203.15556", title: "Training Compute-Optimal Large Language Models"}
+  - {id: "2204.02311", title: "PaLM: Scaling Language Modeling with Pathways"}
+  - {id: "2203.02155", title: "Training language models to follow instructions with human feedback"}
+  - {id: "2201.11903", title: "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models"}
+  - {id: "2206.07682", title: "Emergent Abilities of Large Language Models"}
+  - {id: "2212.08073", title: "Constitutional AI: Harmlessness from AI Feedback"}
+  - {id: "2305.18290", title: "Direct Preference Optimization"}
+  - {id: "2302.13971", title: "LLaMA: Open and Efficient Foundation Language Models"}
+  - {id: "2307.09288", title: "Llama 2: Open Foundation and Fine-Tuned Chat Models"}
+  - {id: "2303.08774", title: "GPT-4 Technical Report"}
+  - {id: "2310.06825", title: "Mistral 7B"}
+  - {id: "2401.04088", title: "Mixtral of Experts"}
+  - {id: "2211.05100", title: "BLOOM: A 176B-Parameter Open-Access Multilingual Language Model"}
+  - {id: "2412.19437", title: "DeepSeek-V3 Technical Report"}
+  - {id: "2501.12948", title: "DeepSeek-R1"}
+  - {id: "2104.09864", title: "RoFormer: Enhanced Transformer with Rotary Position Embedding"}
+  - {id: "2101.03961", title: "Switch Transformers"}
+  - {id: "2006.16668", title: "GShard"}
+  - {id: "2312.00752", title: "Mamba: Linear-Time Sequence Modeling with Selective State Spaces"}
+  - {id: "2107.03374", title: "Evaluating Large Language Models Trained on Code"}
+  - {id: "2009.03300", title: "Measuring Massive Multitask Language Understanding"}
+  - {id: "1804.07461", title: "GLUE: A Multi-Task Benchmark and Analysis Platform for Natural Language Understanding"}
+  - {id: "2210.03629", title: "ReAct: Synergizing Reasoning and Acting in Language Models"}
+  - {id: "2302.04761", title: "Toolformer: Language Models Can Teach Themselves to Use Tools"}
+  # Retrieval
+  - {id: "2005.11401", title: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks"}
+  - {id: "2004.04906", title: "Dense Passage Retrieval for Open-Domain Question Answering"}
+  - {id: "1908.10084", title: "Sentence-BERT"}
+  # Efficiency and inference
+  - {id: "2106.09685", title: "LoRA: Low-Rank Adaptation of Large Language Models"}
+  - {id: "2305.14314", title: "QLoRA: Efficient Finetuning of Quantized LLMs"}
+  - {id: "2205.14135", title: "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness"}
+  - {id: "2307.08691", title: "FlashAttention-2"}
+  - {id: "2309.06180", title: "Efficient Memory Management for Large Language Model Serving with PagedAttention"}
+  - {id: "2211.17192", title: "Fast Inference from Transformers via Speculative Decoding"}
+  - {id: "2210.17323", title: "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers"}
+  - {id: "2208.07339", title: "LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale"}
+  - {id: "2306.00978", title: "AWQ: Activation-aware Weight Quantization"}
+  # Vision and multimodal
+  - {id: "2010.11929", title: "An Image is Worth 16x16 Words"}
+  - {id: "2103.00020", title: "Learning Transferable Visual Models From Natural Language Supervision"}
+  - {id: "2006.11239", title: "Denoising Diffusion Probabilistic Models"}
+  - {id: "2112.10752", title: "High-Resolution Image Synthesis with Latent Diffusion Models"}
+  - {id: "1506.02640", title: "You Only Look Once: Unified, Real-Time Object Detection"}
+  - {id: "1506.01497", title: "Faster R-CNN"}
+  - {id: "1703.06870", title: "Mask R-CNN"}
+  - {id: "1505.04597", title: "U-Net: Convolutional Networks for Biomedical Image Segmentation"}
+  - {id: "2304.02643", title: "Segment Anything"}
+  # Reinforcement learning
+  - {id: "1312.5602", title: "Playing Atari with Deep Reinforcement Learning"}
+  - {id: "1707.06347", title: "Proximal Policy Optimization Algorithms"}
+  - {id: "1509.02971", title: "Continuous control with deep reinforcement learning"}
+  - {id: "1801.01290", title: "Soft Actor-Critic"}
+  # Graphs
+  - {id: "1609.02907", title: "Semi-Supervised Classification with Graph Convolutional Networks"}
+  - {id: "1710.10903", title: "Graph Attention Networks"}
+  - {id: "1706.02216", title: "Inductive Representation Learning on Large Graphs"}
+  # Robustness, privacy
+  - {id: "1312.6199", title: "Intriguing properties of neural networks"}
+  - {id: "1412.6572", title: "Explaining and Harnessing Adversarial Examples"}
+  - {id: "1706.06083", title: "Towards Deep Learning Models Resistant to Adversarial Attacks"}
+  - {id: "1607.00133", title: "Deep Learning with Differential Privacy"}
+  - {id: "1602.05629", title: "Communication-Efficient Learning of Deep Networks from Decentralized Data"}
+  # ML systems
+  - {id: "1605.08695", title: "TensorFlow: A system for large-scale machine learning"}
+  - {id: "1912.01703", title: "PyTorch: An Imperative Style, High-Performance Deep Learning Library"}
+  - {id: "1712.05889", title: "Ray: A Distributed Framework for Emerging AI Applications"}
+  - {id: "1802.04799", title: "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning"}
+  - {id: "1909.08053", title: "Megatron-LM"}
+  - {id: "2104.04473", title: "Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM"}
+  - {id: "1910.02054", title: "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models"}
+  - {id: "1811.06965", title: "GPipe"}
+  # Theoretical CS
+  - {id: "1512.03547", title: "Graph Isomorphism in Quasipolynomial Time"}
+  - {id: "2203.00671", title: "Maximum Flow and Minimum-Cost Flow in Almost-Linear Time"}
+  - {id: "2001.04383", title: "MIP* = RE"}
+  # Mathematics
+  - {id: "math/0211159", title: "The entropy formula for the Ricci flow and its geometric applications"}
+  - {id: "math/0303109", title: "Ricci flow with surgery on three-manifolds"}
+  - {id: "math/0307245", title: "Finite extinction time for the solutions to the Ricci flow on certain three-manifolds"}
+  - {id: "1603.04246", title: "The sphere packing problem in dimension 8"}
+  - {id: "1603.06518", title: "The sphere packing problem in dimension 24"}
+  - {id: "1311.4600", title: "Small gaps between primes"}
+  - {id: "1907.00847", title: "Induced subgraphs of hypercubes and a proof of the Sensitivity Conjecture"}
+  - {id: "1909.03562", title: "Almost all orbits of the Collatz map attain almost bounded values"}
+  - {id: "2001.02665", title: "A proof of Ringel's Conjecture"}
+  - {id: "2203.17207", title: "A proof of the Kahn-Kalai conjecture"}
+  - {id: "2302.05537", title: "Strong bounds for 3-progressions"}
+  - {id: "2303.09521", title: "An exponential improvement for diagonal Ramsey"}
+  - {id: "2311.05762", title: "On a conjecture of Marton"}
