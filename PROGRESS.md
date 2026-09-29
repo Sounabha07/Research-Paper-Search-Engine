@@ -16,7 +16,8 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 ### Milestone 1 (done 2026-09-29)
 - Verified live: all 7 services up, `/health/ready` all green, Gemini model check passed for
   `gemini-3.5-flash` and `gemini-3.5-flash-lite`, GPU visible in the worker container.
-- `llm_prices` in config.yaml is null, so `llm_calls.cost_usd` is logged as null until real prices are filled in.
+- `llm_prices` filled in: flash 1.50 / 9.00, flash-lite 0.30 / 2.50 USD per 1M tokens (output includes thinking).
+- Repo moved to `C:\search engine`, out of OneDrive; stack re-verified green there. Approved and pushed.
 - Postgres and Redis are not published on host ports (host port 5432 was unavailable). Use `docker compose exec postgres psql -U arxiv arxiv`.
 - Redis persists to `DATA_DIR/redis` (not listed in spec section 4, but keeps all data under DATA_DIR).
 - HNSW indexes exist from migration 0001. Milestone 2 may drop and rebuild them around the bulk load for speed.
