@@ -30,4 +30,6 @@ make embed             # abstract embeddings on the GPU, then build the vector i
 `make score` recomputes scores on its own. The first full load takes a few hours on a laptop; later runs
 only touch new or changed papers.
 
-All data lives under `DATA_DIR` (default `./data`) and never goes in the repo.
+All data lives under `DATA_DIR` (default `./data`) and never goes in the repo, except the Postgres data, which
+is in the Docker named volume `arxiv-engine_pgdata` for I/O speed. `docker compose down -v` deletes it; back it up
+with `make backup` (written to `DATA_DIR/backups`).

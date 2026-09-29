@@ -38,10 +38,25 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - `/admin/stats` is cached 30s and single-flight (its counts scan the whole table).
 - Timings on this laptop: download 10 min, load 29 min, score 17 min, embeddings ~2.5 h (~130/s; GPU encode
   ~400/s, the rest is Postgres writes), index rebuild ~23 min, VACUUM FULL 22 min.
-- Storage: Postgres on the Windows bind mount does ~3.4k random 8KB reads/s, the main cost of every bulk job.
-  Putting DATA_DIR on the WSL2 filesystem would avoid it (user's decision).
-- The HNSW build outgrows maintenance_work_mem=1GB at ~740k rows (slower tail). Fine now; revisit as the
-  corpus grows.
+- Storage: Postgres on the Windows bind mount was the main cost of every bulk job (see the move below).
+- The HNSW build outgrew maintenance_work_mem=1GB at ~740k rows (slower tail); index builds now use 2GB (below).
+
+### Between milestones 2 and 3 (2026-09-29)
+- Postgres data moved from the `DATA_DIR/postgres` bind mount to the Docker named volume `arxiv-engine_pgdata`
+  (on the WSL2 filesystem, inside Docker's disk image). Everything else stays in DATA_DIR. Migrated by copying
+  the data directory after a clean shutdown (no rebuild); counts identical before/after (820,325 papers,
+  820,325 embeddings, 103 landmarks, same sum of meta_score). The old bind folder was then removed.
+  - Random 8KB reads, 1GB file, VM page cache dropped first: bind mount 2,517/s cold, 3,232/s cached;
+    named volume 5,072/s cold, 470,824/s cached. The bind mount never benefits from the VM page cache.
+  - Same search queries as milestone 2: vector 591/524 ms -> 390/299 ms cold, 1-2 ms warm; keyword
+    995 ms -> 336 ms cold, 6 ms warm.
+  - Backups still go to `DATA_DIR/backups` (bind mount). Backup after the move:
+    `data/backups/arxiv-20260929-172426.dump` (1.9 GB, pg_dump custom format, verified with pg_restore --list).
+  - Caution: `docker volume rm`, `docker compose down -v`, or a Docker Desktop reset/purge deletes the database.
+    Restore with `make restore FILE=<dump>` after `make migrate`.
+- Index builds set `maintenance_work_mem = 2GB` for their own session only (`ingest/indexes.py`); the server
+  default stays 1GB. Postgres `shm_size` raised to 3gb because parallel HNSW builds hold the graph in shared memory.
+- Postgres `stop_grace_period: 180s` so it always shuts down cleanly.
 - Postgres healthcheck has `start_period: 600s` so WAL recovery after an unclean stop doesn't block the stack.
 - Foundational papers (older papers cited by >= 20 full-text papers) need citation edges: milestone 3 / nightly.
 - `make landmarks` (full-text prefetch) and `make warm` arrive in milestone 3.

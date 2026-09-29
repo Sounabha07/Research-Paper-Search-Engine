@@ -21,6 +21,9 @@ from core.logging import setup_logging
 log = logging.getLogger(__name__)
 
 PARALLEL_BUILD_WORKERS = 4
+# Session-only override for index builds; the server default (1GB) stays as configured.
+# The papers HNSW graph outgrows 1GB at ~740k rows.
+BUILD_MAINTENANCE_WORK_MEM = "2GB"
 
 PAPER_INDEXES: dict[str, str] = {
     "papers_abstract_embedding_hnsw": (
@@ -57,6 +60,7 @@ async def drop_secondary(conn: asyncpg.Connection, keep: frozenset[str] = frozen
 async def ensure(conn: asyncpg.Connection) -> dict[str, float]:
     """Create any missing index. Returns build seconds per index created."""
     await conn.execute(f"SET max_parallel_maintenance_workers = {PARALLEL_BUILD_WORKERS}")
+    await conn.execute(f"SET maintenance_work_mem = '{BUILD_MAINTENANCE_WORK_MEM}'")
     have = await existing(conn)
     built: dict[str, float] = {}
     for name, ddl in PAPER_INDEXES.items():
@@ -66,6 +70,7 @@ async def ensure(conn: asyncpg.Connection) -> dict[str, float]:
         await conn.execute(ddl)
         built[name] = round(time.monotonic() - started, 1)
         log.info("built papers index", extra={"index": name, "s": built[name]})
+    await conn.execute("RESET maintenance_work_mem")
     return built
 
 

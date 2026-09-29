@@ -52,10 +52,12 @@ services:
       - maintenance_work_mem=1GB
       - -c
       - work_mem=64MB
-    shm_size: 2gb
+    shm_size: 3gb  # parallel HNSW builds keep the graph in shared memory (up to maintenance_work_mem)
+    # Named volume on the WSL2 filesystem: much faster random I/O than a Windows bind mount.
     volumes:
-      - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       - ${DATA_DIR:-./data}/backups:/backups
+    stop_grace_period: 180s
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U arxiv -d arxiv"]
       start_period: 600s
@@ -109,3 +111,6 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+
+volumes:
+  pgdata:
