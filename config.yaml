@@ -1,0 +1,66 @@
+corpus:
+  years_back: 5                      # by v1 submission date
+  categories_prefixes: ["cs.", "math."]
+  landmarks_file: seeds/landmark_papers.yaml
+  foundational_min_fulltext_citations: 20   # older papers cited by this many full-text papers join tier 1
+  stub_min_corpus_citations: 3
+  warm_default_top_n: 30             # papers fetched by `make warm`
+score_weights:                       # metadata score, used as the retrieval prior and to rank fetch candidates
+  venue_accepted: 0.55
+  code_available: 0.25
+  recency: 0.20
+venue_patterns:                      # matched case-insensitively in journal-ref and comments
+  - NeurIPS|NIPS|ICML|ICLR|COLT|AISTATS|UAI|AAAI|IJCAI|KDD|WWW|SIGIR|WSDM
+  - CVPR|ICCV|ECCV|ACL|EMNLP|NAACL|COLING|TACL|TMLR|JMLR
+  - OSDI|SOSP|NSDI|EuroSys|ATC|MLSys|ASPLOS|ISCA|MICRO|SIGMOD|VLDB|ICDE|PODC|SPAA|PLDI|POPL|SIGCOMM
+  - STOC|FOCS|SODA|ICALP|CCC|ITCS
+  - Annals of Mathematics|Inventiones|Journal of the AMS|J\. Amer\. Math\. Soc|Acta Mathematica|Duke Math|Publ\. Math\. IHES|Geometry & Topology|Forum of Mathematics
+venue_context_words: "accepted|to appear|published|camera[- ]ready|proceedings|in press"
+chunking:
+  target_tokens: 350
+  max_tokens: 450
+  overlap_tokens: 50
+  min_tokens: 50
+models:
+  embedding: BAAI/bge-small-en-v1.5   # 384 dims
+  embedding_query_prefix: "Represent this sentence for searching relevant passages: "
+  reranker: BAAI/bge-reranker-base
+  llm_main: gemini-3.5-flash
+  llm_light: gemini-3.5-flash-lite
+retrieval:
+  paper_keyword_k: 100               # per query, over title + abstract
+  paper_vector_k: 100
+  rerank_top_n: 50                   # merged candidates sent to the reranker
+  chunk_keyword_k: 50                # within the selected papers only
+  chunk_vector_k: 50
+  rrf_k: 60
+  rerank_min_score: null             # tune with eval
+  hnsw_ef_search: 100
+  prior_boost_max: 0.05              # composite-score boost after rerank, capped
+agent:
+  max_queries: 3                     # search queries generated from the question
+  papers_for_answer: 12              # top N papers used for the answer (10 to 15)
+  passages_for_answer: 25
+  max_passages_per_paper: 3
+  fetch_wait_s: 60                   # deep mode: max wait for full-text fetches
+  quick_timeout_s: 20
+  deep_timeout_s: 120
+  max_notes: 50
+  verify_batch_size: 5
+  consensus_claims: 3
+  chain_from_top_papers: 5            # deep mode: follow references of these papers
+  chain_max_added: 3
+  thread_full_turns: 3               # turns passed verbatim, older ones summarized
+  thread_carryover_boost: 0.05
+llm_client:
+  max_concurrency: 4
+  retries: 5
+  backoff_base_s: 1
+  backoff_max_s: 30
+  cache_ttl_days: 7
+arxiv:
+  min_interval_s: 3.1
+  user_agent: "arxiv-research-engine/0.1 (mailto:${CONTACT_EMAIL})"
+llm_prices:                          # USD per 1M tokens (output includes thinking tokens). null = unknown, cost is logged as null.
+  gemini-3.5-flash: {input: null, output: null}
+  gemini-3.5-flash-lite: {input: null, output: null}
