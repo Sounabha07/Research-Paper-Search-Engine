@@ -30,7 +30,7 @@ _STAGE = "CREATE TEMP TABLE IF NOT EXISTS emb_stage (arxiv_id text, emb halfvec(
 _APPLY = "UPDATE papers p SET abstract_embedding = s.emb FROM emb_stage s WHERE p.arxiv_id = s.arxiv_id"
 _NEXT = """
 SELECT arxiv_id, title, abstract FROM papers
-WHERE abstract_embedding IS NULL AND arxiv_id > $1
+WHERE abstract_embedding IS NULL AND state <> 'discovered' AND arxiv_id > $1
 ORDER BY arxiv_id LIMIT $2
 """
 
@@ -39,7 +39,9 @@ async def embed_abstracts(cfg: AppConfig) -> str:
     conn = await raw_connection()
     rebuilt: dict[str, float] = {}
     try:
-        pending = await conn.fetchval("SELECT count(*) FROM papers WHERE abstract_embedding IS NULL")
+        pending = await conn.fetchval(
+            "SELECT count(*) FROM papers WHERE abstract_embedding IS NULL AND state <> 'discovered'"
+        )
         total = await conn.fetchval("SELECT count(*) FROM papers")
         print(f"abstract embeddings: {pending:,} pending of {total:,} papers", flush=True)
         if pending >= REBUILD_THRESHOLD:

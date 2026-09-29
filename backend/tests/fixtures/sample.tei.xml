@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xml:space="preserve" xmlns="http://www.tei-c.org/ns/1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <teiHeader xml:lang="en">
+    <fileDesc>
+      <titleStmt>
+        <title level="a" type="main">Low-Rank Adapters for Sparse Transformers</title>
+      </titleStmt>
+    </fileDesc>
+    <profileDesc>
+      <abstract>
+        <div xmlns="http://www.tei-c.org/ns/1.0">
+          <p><s>We study low-rank adapters for sparse transformers.</s><s>Our method reduces memory by 3x.</s></p>
+        </div>
+      </abstract>
+    </profileDesc>
+  </teiHeader>
+  <text xml:lang="en">
+    <body>
+      <div xmlns="http://www.tei-c.org/ns/1.0">
+        <head n="1">Introduction</head>
+        <p><s>Large models are expensive to fine-tune <ref type="bibr" target="#b0">[1]</ref>.</s><s>Adapters help <ref type="bibr" target="#b1">[2]</ref>.</s></p>
+        <p><s>We extend LoRA to sparse attention.</s></p>
+      </div>
+      <div xmlns="http://www.tei-c.org/ns/1.0">
+        <head n="2">Method</head>
+        <p><s>Let W be a weight matrix.</s><s>We learn A and B with rank r.</s></p>
+        <formula xml:id="formula_0">W' = W + BA</formula>
+        <div>
+          <head n="2.1">Sparsity</head>
+          <p><s>Attention is restricted to a local window.</s></p>
+        </div>
+      </div>
+    </body>
+    <back>
+      <div type="acknowledgement">
+        <div xmlns="http://www.tei-c.org/ns/1.0"><head>Acknowledgements</head><p><s>We thank our funders.</s></p></div>
+      </div>
+      <div type="annex">
+        <div xmlns="http://www.tei-c.org/ns/1.0"><head>A Proofs</head><p><s>The proof is straightforward.</s></p></div>
+      </div>
+      <div type="references">
+        <listBibl>
+          <biblStruct xml:id="b0">
+            <analytic><title level="a" type="main">LoRA: Low-Rank Adaptation of Large Language Models</title></analytic>
+            <monogr><title level="m">ICLR</title><imprint><date type="published" when="2022" /></imprint></monogr>
+            <idno type="arXiv">arXiv:2106.09685v2</idno>
+            <note type="raw_reference">E. Hu et al. LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022.</note>
+          </biblStruct>
+          <biblStruct xml:id="b1">
+            <analytic><title level="a" type="main">Parameter-Efficient Transfer Learning for NLP</title></analytic>
+            <monogr><title level="j">ICML</title><imprint><date type="published" when="2019-06" /></imprint></monogr>
+            <note type="raw_reference">N. Houlsby et al. Parameter-efficient transfer learning for NLP. arXiv preprint arXiv:1902.00751, 2019.</note>
+          </biblStruct>
+          <biblStruct xml:id="b2">
+            <monogr><title level="m">Deep Learning</title><imprint><date type="published" when="2016" /></imprint></monogr>
+          </biblStruct>
+          <biblStruct xml:id="b3">
+            <monogr><imprint /></monogr>
+            <note type="raw_reference">G. Perelman. Ricci flow with surgery. math.DG/0303109.</note>
+          </biblStruct>
+        </listBibl>
+      </div>
+    </back>
+  </text>
+</TEI>

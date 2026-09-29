@@ -4,7 +4,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 
 - [x] 1. **Skeleton**: Compose (postgres, redis, grobid, api, worker, fetcher, frontend), config loading, migrations for all tables, LLM client with model check, health endpoints, Makefile.
 - [x] 2. **Metadata**: Kaggle stream + filter, landmark validation, tier 1 papers, metadata score, abstract embeddings + indexes, counts printed. `/admin` page.
-- [ ] 3. **Full text on demand**: fetcher service with global limiter and two queues, GROBID parsing with bibliography, chunking, chunk embeddings, PDF lifecycle and janitor, landmark prefetch, `POST /papers/{id}/fulltext`, `make warm`, reference resolution into citation edges and stubs, citation scores and PageRank. Report the reference resolution rate.
+- [x] 3. **Full text on demand**: fetcher service with global limiter and two queues, GROBID parsing with bibliography, chunking, chunk embeddings, PDF lifecycle and janitor, landmark prefetch, `POST /papers/{id}/fulltext`, `make warm`, reference resolution into citation edges and stubs, citation scores and PageRank. Report the reference resolution rate.
 - [ ] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
 - [ ] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
 - [ ] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
@@ -60,3 +60,39 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - Postgres healthcheck has `start_period: 600s` so WAL recovery after an unclean stop doesn't block the stack.
 - Foundational papers (older papers cited by >= 20 full-text papers) need citation edges: milestone 3 / nightly.
 - `make landmarks` (full-text prefetch) and `make warm` arrive in milestone 3.
+
+### Milestone 3 (done 2026-09-30, awaiting approval)
+- Test run: 103 landmarks + 25 recent papers, all 128 `ready`, all parsed by GROBID (0 PyMuPDF fallbacks).
+  - Fetch time per paper (download only, excluding the 3.1s rate-limit spacing): median 1.4s, mean 4.9s,
+    p90 12.5s, max 83s (48 MB PDF). PDF size median 1.1 MB.
+  - GROBID parse time per paper: median 4.6s, mean 7.0s, p90 12.9s, max 58.6s (first call, JVM warm-up).
+  - Chunks per paper: median 49, mean 66, p90 138, min 12, max 503; 50-350 tokens per chunk.
+  - References: 6,614. Resolved to a corpus paper 42.6%, stub 10.4%, arXiv id not in DB 0.4% (the arXiv API
+    returned nothing for those ids), unresolved 46.6%. By method: arXiv id 1,970, exact title 687, trigram 4.
+  - Unresolved sample: mostly works not on arXiv (books, journals, pre-2000: 488) or arXiv papers older than the
+    5-year window that the reference names only by title. Only 55 unresolved refs have a >= 0.8 trigram match
+    in the DB at any year, so the rules are not missing many.
+  - Citation graph: 3,499 edges, 142 stubs; PageRank for 1,612 nodes. Most cited: Attention Is All You Need (39).
+- Semantics chosen where the spec is open:
+  - `fetch:done:{id}` is published when the paper reaches `ready` (or `abstract_only`), not when the PDF is
+    downloaded, because waiting runs need chunks, not a PDF.
+  - Referenced arXiv ids missing from the DB are filled via the arXiv API (6.2b) as state `discovered`: they
+    are graph nodes with metadata but not tier 1 (not scored, not embedded, excluded from search).
+    Promotion to tier 1 as foundational papers happens in the nightly job (milestone 8).
+  - Title matching (exact and trigram) needs >= 10 normalized characters; shorter titles ("Adam") only resolve
+    by arXiv id.
+  - `parsed/` always holds TEI; the PyMuPDF fallback writes its result as TEI too, so re-chunking reads one format.
+  - Chunk text is an exact slice of one canonical document text (headings + paragraphs), for highlighting.
+- Bugs found in the live run and fixed:
+  - Deadlock between two papers resolving references at once (shared cited-paper rows). Graph writers now take a
+    transaction-level advisory lock; the chunk job also retries on deadlock/serialization errors.
+  - Citation percentiles: NULL PageRank sorted as highest, and percent_rank gave the only member of a
+    (category, year) group 0, so Attention Is All You Need scored 0.30. Now percentiles are over papers with
+    citation data only, using cume_dist. With 128 full-text papers, groups are tiny and scores are noisy.
+- Memory: the Docker VM (8 GB) ran out once when GROBID (~3.1-3.4 GB, JVM sized from the VM), Postgres, the
+  worker and two extra one-off containers ran together; the Docker engine hung and was restarted. Postgres
+  recovered in 0s. A 3 GB cap on GROBID starved it (all 5 test papers fell back to PyMuPDF), so it was reverted
+  and those papers re-parsed with GROBID. The host was also at 38.5/41.4 GB committed memory.
+- New commands: `make landmarks`, `make warm TOPIC="..." [N=30]`, `make fetch IDS="..."`, `make fulltext-report`,
+  `POST /papers/{id}/fulltext`. `make score` now includes PageRank.
+

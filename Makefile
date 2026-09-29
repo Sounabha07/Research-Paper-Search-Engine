@@ -12,7 +12,8 @@ help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"
 	@echo "backup | restore FILE=<name>.dump"
 	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
-	@echo "landmarks | warm TOPIC=... | nightly | eval  (later milestones)"
+	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report"
+	@echo "nightly | eval  (later milestones)"
 
 up:
 	$(COMPOSE) up -d --build postgres redis grobid
@@ -64,8 +65,24 @@ score:
 embed:
 	$(COMPOSE) run --rm worker python -m ingest.abstract_embed
 
-landmarks warm:
-	@echo "make $@ arrives in milestone 3" && exit 1
+# Full text on demand (milestone 3). Fetches go through the single fetcher service.
+landmarks:
+	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli landmarks
+
+warm:
+ifndef TOPIC
+	$(error Usage: make warm TOPIC="..." [N=30])
+endif
+	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli warm "$(TOPIC)" $(if $(N),--n $(N))
+
+fetch:
+ifndef IDS
+	$(error Usage: make fetch IDS="2106.09685 2305.14314")
+endif
+	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli fetch $(IDS)
+
+fulltext-report:
+	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli report
 
 nightly eval:
 	@echo "make $@ arrives in milestone 8" && exit 1

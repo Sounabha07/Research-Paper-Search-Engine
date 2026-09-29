@@ -26,6 +26,19 @@ make ingest-metadata   # download/refresh the Kaggle arXiv snapshot, load tier 1
 make embed             # abstract embeddings on the GPU, then build the vector index
 ```
 
+## Full text on demand
+
+```bash
+make landmarks                          # queue the validated landmark papers
+make warm TOPIC="speculative decoding"  # queue the top 30 papers for a topic
+make fetch IDS="2106.09685"             # queue specific papers
+make fulltext-report                    # fetch/parse timings, chunks, reference resolution
+make score                              # PageRank + scores from the citation edges
+```
+
+All arXiv traffic goes through the single `fetcher` service (one request every 3.1 s). The API equivalent of
+the "Get full text" button is `POST /papers/{arxiv_id}/fulltext`.
+
 `make ingest-metadata ARGS=--dry-run` streams the snapshot and prints the counts without writing anything.
 `make score` recomputes scores on its own. The first full load takes a few hours on a laptop; later runs
 only touch new or changed papers.

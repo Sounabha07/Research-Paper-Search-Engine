@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.routers import admin, health
+from app.routers import admin, health, papers
 from core.config import ensure_data_dirs, get_config, get_settings
 from core.db import get_engine, get_sessionmaker
 from core.llm import LLMClient, db_call_logger
@@ -37,6 +37,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="arXiv Research Engine", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router)
     app.include_router(admin.router)
+    app.include_router(papers.router)
     return app
 
 

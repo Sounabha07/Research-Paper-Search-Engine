@@ -12,11 +12,15 @@ from core.config import AppConfig, get_config
 from core.db import raw_connection
 from core.logging import setup_logging
 from ingest import indexes
+from ingest.citations import recompute_pagerank
 
 # Above this many changed rows, drop and rebuild the secondary indexes around the update.
 BULK_THRESHOLD = 50_000
 
-# Papers with no citation data yet (pagerank IS NULL) use meta_score alone.
+# Papers with no citation data yet (pagerank IS NULL) use meta_score alone. Citation percentiles
+# are computed only among papers that have citation data (NULLs would otherwise rank highest),
+# with cume_dist so the top of a group (or its only member) gets 1.0 rather than 0.
+# 'discovered' papers (metadata filled for references, not tier 1) are not scored.
 _RECOMPUTE = """
 WITH base AS (
     SELECT
@@ -27,6 +31,7 @@ WITH base AS (
         fulltext_citations::double precision
             / greatest(extract(epoch FROM now() - v1_date) / (86400 * 30.4375), 1) AS velocity
     FROM papers
+    WHERE state <> 'discovered'
 ),
 scored AS (
     SELECT
@@ -34,8 +39,10 @@ scored AS (
         CASE WHEN is_landmark THEN 1.0
              ELSE $1::float8 * venue_accepted::int + $2::float8 * code_available::int + $3::float8 * recency
         END AS meta_score,
-        percent_rank() OVER (PARTITION BY primary_category, v1_year ORDER BY velocity) AS velocity_pct,
-        percent_rank() OVER (PARTITION BY primary_category, v1_year ORDER BY pagerank) AS pagerank_pct
+        cume_dist() OVER (PARTITION BY primary_category, v1_year, pagerank IS NULL ORDER BY velocity)
+            AS velocity_pct,
+        cume_dist() OVER (PARTITION BY primary_category, v1_year, pagerank IS NULL ORDER BY pagerank)
+            AS pagerank_pct
     FROM base
 ),
 final AS (
@@ -98,6 +105,7 @@ async def recompute_scores(cfg: AppConfig) -> str:
     dropped: list[str] = []
     rebuilt: dict[str, float] = {}
     try:
+        await recompute_pagerank(conn)
         await conn.execute(_STAGE)
         await conn.execute("TRUNCATE score_new")
         await conn.execute(_RECOMPUTE, w.venue_accepted, w.code_available, w.recency)
