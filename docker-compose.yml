@@ -1,0 +1,110 @@
+name: arxiv-engine
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: arxiv-engine-backend
+  env_file: .env
+  environment: &backend-env
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: arxiv
+    POSTGRES_DB: arxiv
+    REDIS_URL: redis://redis:6379/0
+    GROBID_URL: http://grobid:8070
+    DATA_DIR_IN_CONTAINER: /data
+    HF_HOME: /data/models
+    CONFIG_PATH: /app/config.yaml
+  volumes:
+    - ${DATA_DIR:-./data}:/data
+    - ./config.yaml:/app/config.yaml:ro
+    - ./seeds:/app/seeds:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: arxiv
+      POSTGRES_DB: arxiv
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - work_mem=64MB
+    shm_size: 2gb
+    volumes:
+      - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
+      - ${DATA_DIR:-./data}/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arxiv -d arxiv"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ${DATA_DIR:-./data}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  grobid:
+    image: grobid/grobid:0.9.1-crf
+    ports:
+      - "127.0.0.1:8070:8070"
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    deploy: *gpu
+
+  worker:
+    <<: *backend
+    command: ["arq", "workers.arq_worker.WorkerSettings"]
+    deploy: *gpu
+
+  fetcher:
+    <<: *backend
+    command: ["python", "-m", "workers.fetcher"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        API_URL: http://api:8000
+    image: arxiv-engine-frontend
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
