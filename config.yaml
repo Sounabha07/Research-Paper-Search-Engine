@@ -42,7 +42,7 @@ agent:
   papers_for_answer: 12              # top N papers used for the answer (10 to 15)
   passages_for_answer: 25
   max_passages_per_paper: 3
-  fetch_wait_s: 60                   # deep mode: max wait for full-text fetches
+  fetch_wait_s: 90                   # deep mode: max wait for full-text fetches
   quick_timeout_s: 20
   deep_timeout_s: 120
   max_notes: 50

@@ -150,8 +150,12 @@ async def cmd_report() -> None:
     print(f"landmarks ready: {n_landmarks}, others ready: {len(ready) - n_landmarks}")
     print("fetch time per paper (download only):", _stats([v["fetch_s"] for v in m.values() if "fetch_s" in v], "s"))
     print("PDF size (MB):", _stats([v["pdf_bytes"] / 1e6 for v in m.values() if "pdf_bytes" in v]))
-    print("GROBID parse time per paper:",
-          _stats([v["parse_s"] for v in m.values() if v.get("parser") == "grobid"], "s"))  # fmt: skip
+    grobid_times = [v.get("grobid_s", v["parse_s"]) for v in m.values() if v.get("parser") == "grobid"]
+    print("GROBID parse time per paper (inside GROBID):", _stats(grobid_times, "s"))
+    print(
+        "  incl. waiting for a GROBID slot:",
+        _stats([v["parse_s"] for v in m.values() if v.get("parser") == "grobid"], "s"),
+    )
     print(f"parser: grobid {parsers.get('grobid', 0)}, pymupdf fallback {parsers.get('pymupdf', 0)}")
     print("chunks per paper:", _stats([float(c) for c in chunk_counts]))
     total = refs["total"] or 1

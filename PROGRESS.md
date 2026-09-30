@@ -96,3 +96,24 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - New commands: `make landmarks`, `make warm TOPIC="..." [N=30]`, `make fetch IDS="..."`, `make fulltext-report`,
   `POST /papers/{id}/fulltext`. `make score` now includes PageRank.
 
+### Between milestones 3 and 4 (2026-09-30)
+- GROBID JVM heap set to 2.5 GB via `JAVA_OPTS=-Xmx2560m` (docker-compose.yml). Checked in the image, not guessed:
+  its start script `/opt/grobid/grobid-service/bin/grobid-service` passes
+  `$DEFAULT_JVM_OPTS $JAVA_OPTS $GROBID_SERVICE_OPTS` to java, and the image already sets `GROBID_SERVICE_OPTS`
+  (required `--add-opens` flags), so the heap goes in `JAVA_OPTS`. Verified `-Xmx2560m` on the running java
+  process with the `--add-opens` flags intact. No container memory cap.
+- GROBID parse concurrency lowered from 4 (spec) to 2 (`ingest/grobid.py`).
+- `agent.fetch_wait_s` raised from 60 to 90 (config.yaml).
+- 20-paper test: 20/20 parsed by GROBID, 0 PyMuPDF fallbacks, done in 2.5 min.
+  Peak Docker VM memory 7,379 MB of 7,792 MB (95%; 413 MB left), from 4,944 MB idle. Per-container peaks:
+  grobid 4,658 MB, postgres 1,220 MB, worker 1,097 MB. The heap cap does not bound GROBID: the java process
+  holds ~3.9 GB resident at idle (about 1.4 GB outside the heap: native CRF models, metaspace, threads), and
+  pdfalto subprocesses add more while parsing.
+- Parse timing now measures time inside GROBID separately from waiting for a free slot (`grobid_s` vs
+  `parse_s`); the earlier 20-paper median of 19 s included queueing. A follow-up 10-paper run: inside GROBID
+  median ~6.5 s (2.8-14.8 s), 10/10 GROBID. 158 full-text papers in total, all GROBID.
+- Observed: the arXiv query API (metadata for referenced ids, spec 6.2b) returns HTTP 429 without Retry-After
+  even at one request per 3.1 s (22 times in 15 min); PDF downloads were not throttled. The fetcher backs off
+  exponentially and gives up on a metadata batch after 5 attempts (logged). Metadata jobs share the bulk queue,
+  so they delay bulk PDF fetches; urgent fetches are unaffected.
+

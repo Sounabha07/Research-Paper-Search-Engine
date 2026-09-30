@@ -175,8 +175,8 @@ async def test_grobid_form_and_busy_retry() -> None:
     g = GrobidClient(
         "http://grobid:8070", client=httpx.AsyncClient(transport=httpx.MockTransport(handle)), sleep=no_sleep
     )
-    tei = await g.process_fulltext(b"%PDF", "x.pdf")
-    assert b"<TEI" in tei
+    result = await g.process_fulltext(b"%PDF", "x.pdf")
+    assert b"<TEI" in result.tei and result.request_s >= 0
     req = requests[-1]
     assert str(req.url) == "http://grobid:8070/api/processFulltextDocument"
     body = req.read().decode(errors="replace")

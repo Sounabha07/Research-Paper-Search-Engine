@@ -80,6 +80,11 @@ services:
 
   grobid:
     image: grobid/grobid:0.9.1-crf
+    # Explicit JVM heap; otherwise the JVM sizes itself from the whole Docker VM. The image's start script
+    # passes $DEFAULT_JVM_OPTS $JAVA_OPTS $GROBID_SERVICE_OPTS to java; GROBID_SERVICE_OPTS is already set by
+    # the image (--add-opens flags), so the heap goes in JAVA_OPTS. No container memory cap (it starved GROBID).
+    environment:
+      JAVA_OPTS: "-Xmx2560m"
     ports:
       - "127.0.0.1:8070:8070"
     restart: unless-stopped

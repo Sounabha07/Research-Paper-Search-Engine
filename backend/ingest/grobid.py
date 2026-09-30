@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import httpx
 
 log = logging.getLogger(__name__)
 
-MAX_CONCURRENT = 4
+MAX_CONCURRENT = 2  # spec says 4; lowered to 2 to limit memory on the 8GB Docker VM
 BUSY_RETRIES = 6  # GROBID answers 503 when its own pool is full; wait, don't count as a failure
 BUSY_WAIT_S = 5.0
 FORM = {
@@ -23,6 +25,12 @@ FORM = {
 
 class GrobidError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class GrobidResult:
+    tei: bytes
+    request_s: float  # time inside GROBID only, excluding waits for a free slot
 
 
 class GrobidClient:
@@ -41,16 +49,18 @@ class GrobidClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def process_fulltext(self, pdf: bytes, filename: str) -> bytes:
-        """One attempt (the caller decides on retries/fallback). Returns TEI XML bytes."""
+    async def process_fulltext(self, pdf: bytes, filename: str) -> GrobidResult:
+        """One attempt (the caller decides on retries/fallback)."""
         for _ in range(BUSY_RETRIES + 1):
             async with self._sem:
+                started = time.monotonic()
                 try:
                     resp = await self._client.post(
                         self._url, files={"input": (filename, pdf, "application/pdf")}, data=FORM
                     )
                 except httpx.HTTPError as e:
                     raise GrobidError(f"request failed: {type(e).__name__}: {e}") from e
+                request_s = time.monotonic() - started
             if resp.status_code == 503:
                 await self._sleep(BUSY_WAIT_S)
                 continue
@@ -58,5 +68,5 @@ class GrobidClient:
                 raise GrobidError(f"HTTP {resp.status_code}: {resp.text[:200]}")
             if b"<TEI" not in resp.content[:2000]:
                 raise GrobidError("response is not TEI")
-            return resp.content
+            return GrobidResult(resp.content, request_s)
         raise GrobidError("GROBID stayed busy (503)")

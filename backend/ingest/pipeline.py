@@ -94,9 +94,12 @@ async def parse_stage(deps: PipelineDeps, arxiv_id: str) -> str:
     tei: bytes | None = None
     parser = "grobid"
     errors: list[str] = []
+    grobid_s = 0.0  # time inside GROBID, summed over attempts
     for _ in range(GROBID_ATTEMPTS):
         try:
-            tei = await deps.grobid.process_fulltext(pdf, pdf_file.name)
+            result = await deps.grobid.process_fulltext(pdf, pdf_file.name)
+            grobid_s += result.request_s
+            tei = result.tei
             parse_tei(tei)  # must be readable
             break
         except (GrobidError, ET.ParseError) as e:
@@ -125,8 +128,13 @@ async def parse_stage(deps: PipelineDeps, arxiv_id: str) -> str:
 
     write_parsed(parsed_path(deps.settings, arxiv_id), tei)
     await _set_state(deps.pool, arxiv_id, "parsed", parser=parser, last_error=None)
-    await metrics.record(deps.redis, arxiv_id, parse_s=round(parse_s, 2), parser=parser, grobid_errors=len(errors))
-    log.info("parsed", extra={"arxiv_id": arxiv_id, "parser": parser, "s": round(parse_s, 1)})
+    await metrics.record(
+        deps.redis, arxiv_id, parse_s=round(parse_s, 2), grobid_s=round(grobid_s, 2), parser=parser,
+        grobid_errors=len(errors),
+    )  # fmt: skip
+    log.info(
+        "parsed", extra={"arxiv_id": arxiv_id, "parser": parser, "s": round(parse_s, 1), "grobid_s": round(grobid_s, 1)}
+    )
     return parser
 
 
