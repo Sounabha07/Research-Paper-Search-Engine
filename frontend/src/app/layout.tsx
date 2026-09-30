@@ -42,6 +42,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="font-semibold tracking-tight">
               arXiv Research Engine
             </Link>
+            <Link href="/" className="text-muted-foreground hover:text-foreground">
+              Ask
+            </Link>
             <Link href="/search" className="text-muted-foreground hover:text-foreground">
               Search
             </Link>

@@ -10,9 +10,9 @@ from arq import create_pool as create_arq_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
 
-from app.routers import admin, health, papers, search
+from app.routers import admin, health, papers, search, threads
 from core.config import ensure_data_dirs, get_config, get_settings
-from core.db import get_engine, get_sessionmaker
+from core.db import create_pool, get_engine, get_sessionmaker
 from core.llm import LLMClient, db_call_logger
 from core.logging import setup_logging
 from core.redis import get_redis
@@ -31,8 +31,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm = llm
     # Local models live only in the worker; search and answers go through the arq queue.
     app.state.arq = await create_arq_pool(RedisSettings.from_dsn(get_settings().redis_url))
+    app.state.pg_pool = await create_pool(min_size=1, max_size=5)
     log.info("api started")
     yield
+    await app.state.pg_pool.close()
     await app.state.arq.aclose()
     await get_redis().aclose()
     await get_engine().dispose()
@@ -44,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(papers.router)
     app.include_router(search.router)
+    app.include_router(threads.router)
     return app
 
 

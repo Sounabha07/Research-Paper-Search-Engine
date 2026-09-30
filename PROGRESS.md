@@ -6,7 +6,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - [x] 2. **Metadata**: Kaggle stream + filter, landmark validation, tier 1 papers, metadata score, abstract embeddings + indexes, counts printed. `/admin` page.
 - [x] 3. **Full text on demand**: fetcher service with global limiter and two queues, GROBID parsing with bibliography, chunking, chunk embeddings, PDF lifecycle and janitor, landmark prefetch, `POST /papers/{id}/fulltext`, `make warm`, reference resolution into citation edges and stubs, citation scores and PageRank. Report the reference resolution rate.
 - [x] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
-- [ ] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
+- [x] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
 - [ ] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
 - [ ] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
 - [ ] 8. **Feeds, nightly jobs, eval, README**: digests, OAI-PMH nightly, eval suite with ablations, README with architecture diagram, setup, and eval results table (leave a placeholder for the demo video).
@@ -171,4 +171,42 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
     resolved to any arXiv paper 42.8% -> 62.0% (corpus 42.8% -> 45.1%, catalog 0% -> 16.9%),
     stubs 8.3% -> 4.6% (77 stubs removed), unresolved 48.4% -> 33.2%, ids needing the API 42 -> 14.
     (Milestone 3 reported 42.6% on its 128 papers.) Citation edges 3,392 -> 5,617.
+
+### Milestone 5 (done 2026-09-30, awaiting approval)
+- Quick mode end to end in the worker (`research_run_job`, `agent/run.py`): REWRITE (flash-lite, JSON) ->
+  FIND_PAPERS + PASSAGES (section 11 search with thread carryover and evidence reuse) -> READ (flash-lite, JSON,
+  notes validated against the passages) -> WRITE (flash, temp 0.3; tags [[c:id]]/[[a:id]]) -> VERIFY (flash-lite,
+  temp 0, batches of 5; partial -> rewritten once keeping the original tags; unsupported, untagged, or
+  invalid-tag sentences removed) -> CONSENSUS (flash-lite) -> DONE. Every step writes `run_steps` and publishes to
+  `run:{id}`. Every LLM call is logged to `llm_calls` with the run id; run cost/tokens are summed from them.
+- Threads: follow-ups get the last 3 turns verbatim + the running summary (updated with flash-lite once a thread
+  has more than 3 turns); papers cited earlier join the candidates with +0.05 after rerank; chunks cited earlier
+  join the passage candidates; stable per-thread citation numbers in `thread_citations`.
+- API: POST /threads, POST /threads/{id}/runs (409 while a run is active), GET /threads (recent),
+  GET /threads/{id}, GET /runs/{id}, GET /threads/{id}/bibtex, GET /papers/{id}, GET /papers/{id}/content,
+  GET /chunks/{id}. Deep mode returns 400 until milestone 6.
+- UI: `/` ask box (Quick; Deep disabled), `/threads/[id]` (trace, answer with [n] chips, hover popover with the
+  passage and section, click-through to the reader, removed-claims count, cost, time, source list, follow-ups,
+  BibTeX export), `/papers/[id]` minimal reader with the cited passage highlighted and scrolled into view.
+  Fixed: reader highlight drifted on papers with non-BMP math characters (server offsets are code points,
+  JS strings are UTF-16); the reader now slices by code points.
+- Test answers (thread A: 4 turns on LoRA/QLoRA; thread B: fast attention):
+  | answer | time | cost | sentences | removed | rewritten |
+  | LoRA (turn 1) | 23.4 s | $0.0326 | 7 | 0 | 0 |
+  | QLoRA follow-up (turn 2) | 21.9 s | $0.0287 | 10 | 0 | 0 |
+  | single consumer GPU (turn 3) | 33.6 s | $0.0296 | 8 | 0 | 0 |
+  | limitations (turn 4) | 21.7 s | $0.0268 | 9 | 0 | 0 |
+  | fast attention | 28.8 s | $0.0350 | 16 | 0 | 1 |
+  Average ~$0.031 per answer; WRITE (gemini-3.5-flash) is ~80% of the cost: ~2,500-3,500 output tokens per
+  answer, mostly thinking tokens, even at thinking_level "low". Summary produced after turn 4; numbers stable.
+- Open issues:
+  - All test runs exceeded `quick_timeout_s = 20` (22-34 s) and were marked `timed_out`; WRITE alone takes
+    ~15-25 s, and gemini-3.5-flash returned 503 "high demand" several times (one early run took 101 s with two
+    retries). Because the deadline had passed, CONSENSUS was skipped on every run. Needs a decision (raise the
+    quick budget, or keep it and accept no consensus in quick mode).
+  - The verifier removed 0 of 50 sentences and rewrote 1. Removal is covered by unit tests; whether flash-lite is
+    too lenient will show in the milestone 8 citation-precision sample.
+  - Reranker quality: for "How does QLoRA extend LoRA...", the QLoRA paper itself (2305.14314) reranks #20
+    (0.563) below derivative papers, so turn 2 cites derivatives; it is cited in turn 3.
+  - READ initially returned only 3 notes; the prompt now asks for thorough extraction (6-18 notes afterwards).
 

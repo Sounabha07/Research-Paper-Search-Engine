@@ -16,7 +16,7 @@ make up                # build, start infra, migrate, start everything
 make status            # health of every service
 ```
 
-- Frontend: http://localhost:3000 (search at `/search`, admin dashboard at `/admin`)
+- Frontend: http://localhost:3000 (ask at `/`, search at `/search`, admin dashboard at `/admin`)
 - API: http://localhost:8000 (`/health`, `/health/ready`, `/search?q=...`, `/admin/stats`, `/docs`)
 
 ## Loading the corpus metadata

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any, ClassVar
 
 import asyncpg
@@ -16,8 +17,11 @@ from arq.connections import ArqRedis, RedisSettings
 from arq.worker import func
 from pgvector.asyncpg import register_vector
 
+from agent.run import AgentDeps, execute_run
 from core.config import ensure_data_dirs, get_config, get_settings, require_env
+from core.db import get_sessionmaker
 from core.embeddings import load_embedder, load_reranker
+from core.llm import LLMClient, db_call_logger
 from core.logging import setup_logging
 from core.redis import ARQ_QUEUE, get_redis
 from ingest.grobid import GrobidClient
@@ -72,6 +76,11 @@ async def search_job(ctx: dict[str, Any], params: dict[str, Any]) -> dict[str, A
             with_passages=params.get("passages", True),
         )  # fmt: skip
     return result_to_api(result)
+
+
+async def research_run_job(ctx: dict[str, Any], run_id: str) -> str:
+    """Spec 12: one research run (quick mode in milestone 5)."""
+    return await execute_run(ctx["agent"], uuid.UUID(run_id))
 
 
 async def janitor_job(ctx: dict[str, Any]) -> str:
@@ -136,6 +145,13 @@ async def startup(ctx: dict[str, Any]) -> None:
         embedder=embedder,
         gpu_lock=gpu_lock,
     )
+    ctx["agent"] = AgentDeps(
+        cfg=cfg,
+        pool=pool,
+        redis=get_redis(),
+        llm=LLMClient(cfg, redis=get_redis(), call_logger=db_call_logger(get_sessionmaker())),
+        models=ctx["search_models"],
+    )
     await recover(ctx["redis"], ctx["deps"])
     log.info("worker started")
 
@@ -151,6 +167,7 @@ class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         ping,
         func(search_job, timeout=120, max_tries=1, keep_result=60),
+        func(research_run_job, timeout=600, max_tries=1, keep_result=0),
         func(parse_paper, max_tries=MAX_PARSE_FAILURES + 1, timeout=900, keep_result=0),
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),

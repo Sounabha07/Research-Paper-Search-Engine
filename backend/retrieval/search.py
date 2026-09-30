@@ -174,11 +174,16 @@ def merge_query_lists(fused_per_query: Sequence[Sequence[tuple[Any, float]]]) ->
     return sorted(total.items(), key=lambda kv: (-kv[1], str(kv[0])))
 
 
-def apply_prior(hits: list[PaperHit], prior_boost_max: float, min_score: float | None) -> list[PaperHit]:
-    """Spec 11.3: drop below rerank_min_score, add the capped prior, sort by final score."""
+def apply_prior(
+    hits: list[PaperHit], prior_boost_max: float, min_score: float | None, boosts: dict[str, float] | None = None
+) -> list[PaperHit]:
+    """Spec 11.3: drop below rerank_min_score, add the capped prior (and any thread-carryover boost),
+    sort by final score."""
     kept = [h for h in hits if min_score is None or h.rerank_score >= min_score]
     for h in kept:
-        h.final_score = h.rerank_score + prior_boost_max * min(max(h.prior, 0.0), 1.0)
+        h.final_score = (
+            h.rerank_score + prior_boost_max * min(max(h.prior, 0.0), 1.0) + (boosts or {}).get(h.arxiv_id, 0.0)
+        )
     return sorted(kept, key=lambda h: -h.final_score)
 
 
@@ -282,6 +287,8 @@ async def select_papers(
     limit: int,
     timings: Timings,
     counts: dict[str, int],
+    carryover: Sequence[str] = (),
+    carryover_boost: float = 0.0,
 ) -> list[PaperHit]:
     r = cfg.retrieval
     await _set_vector_params(conn, cfg)
@@ -310,6 +317,12 @@ async def select_papers(
             if a not in present:
                 candidates.append((a, 0.0))
                 anchor_only.add(a)
+    # Spec 12b: papers cited earlier in the thread compete too, with a boost after reranking.
+    present = {a for a, _ in candidates}
+    for a in carryover:
+        if a not in present:
+            candidates.append((a, 0.0))
+            present.add(a)
     counts["papers.candidates"] = len(candidates)
     counts["papers.anchor_added"] = len(anchor_only)
     if not candidates:
@@ -336,7 +349,7 @@ async def select_papers(
     for h, s in zip(hits, scores, strict=True):
         h.rerank_score = s
         h.via_anchor = h.arxiv_id in anchor_only
-    selected = apply_prior(hits, r.prior_boost_max, r.rerank_min_score)
+    selected = apply_prior(hits, r.prior_boost_max, r.rerank_min_score, {a: carryover_boost for a in carryover})
     counts["papers.above_min_score"] = len(selected)
     return selected[:limit]
 
@@ -351,10 +364,12 @@ async def select_passages(
     papers: list[PaperHit],
     timings: Timings,
     counts: dict[str, int],
+    reuse_chunks: Sequence[int] = (),
 ) -> list[Passage]:
     r, a = cfg.retrieval, cfg.agent
     ready = [p.arxiv_id for p in papers if p.state == "ready"]
     passages: list[Passage] = []
+    fused: list[tuple[Any, float]] = []
     if ready:
         lists: list[list[int]] = []
         for q, vec in zip(queries, vectors, strict=True):
@@ -364,34 +379,37 @@ async def select_passages(
                 lists.append(await vector_chunks(conn, HalfVector(vec), ready, r.chunk_vector_k))
         with timings.stage("passages.fusion"):
             fused = rrf_fuse(lists, r.rrf_k)[: r.rerank_top_n]
-        counts["passages.candidates"] = len(fused)
-        if fused:
-            with timings.stage("passages.load"):
-                rows = await conn.fetch(
-                    "SELECT id, arxiv_id, section, text, char_start, char_end FROM chunks WHERE id = ANY($1::bigint[])",
-                    [cid for cid, _ in fused],
-                )
-            by_id = {row["id"]: row for row in rows}
-            chunk_passages = [
-                Passage(
-                    arxiv_id=c["arxiv_id"],
-                    source="chunk",
-                    chunk_id=cid,
-                    section=c["section"] or "",
-                    text=c["text"],
-                    char_start=c["char_start"],
-                    char_end=c["char_end"],
-                    rrf=score,
-                    rerank_score=0.0,
-                )
-                for cid, score in fused
-                if (c := by_id.get(cid)) is not None
-            ]
-            with timings.stage("passages.rerank"):
-                scores = await models.rerank(question, [p.text for p in chunk_passages])
-            for p, s in zip(chunk_passages, scores, strict=True):
-                p.rerank_score = s
-            passages = chunk_passages
+    # Spec 12b: chunks cited earlier in the thread can be cited again without refetching.
+    in_fused = {cid for cid, _ in fused}
+    fused += [(cid, 0.0) for cid in reuse_chunks if cid not in in_fused]
+    counts["passages.candidates"] = len(fused)
+    if fused:
+        with timings.stage("passages.load"):
+            rows = await conn.fetch(
+                "SELECT id, arxiv_id, section, text, char_start, char_end FROM chunks WHERE id = ANY($1::bigint[])",
+                [cid for cid, _ in fused],
+            )
+        by_id = {row["id"]: row for row in rows}
+        chunk_passages = [
+            Passage(
+                arxiv_id=c["arxiv_id"],
+                source="chunk",
+                chunk_id=cid,
+                section=c["section"] or "",
+                text=c["text"],
+                char_start=c["char_start"],
+                char_end=c["char_end"],
+                rrf=score,
+                rerank_score=0.0,
+            )
+            for cid, score in fused
+            if (c := by_id.get(cid)) is not None
+        ]
+        with timings.stage("passages.rerank"):
+            scores = await models.rerank(question, [p.text for p in chunk_passages])
+        for p, s in zip(chunk_passages, scores, strict=True):
+            p.rerank_score = s
+        passages = chunk_passages
 
     # Spec 11.6: selected papers without full text contribute their abstract (always kept).
     abstracts = [
@@ -413,6 +431,9 @@ async def search(
     filters: Filters | None = None,
     limit: int | None = None,
     with_passages: bool = True,
+    carryover: Sequence[str] = (),
+    carryover_boost: float = 0.0,
+    reuse_chunks: Sequence[int] = (),
 ) -> SearchResult:
     """Full section-11 retrieval. `queries` defaults to the question itself (no LLM rewrite)."""
     filters = filters or Filters()
@@ -426,10 +447,12 @@ async def search(
         by_query = dict(zip(passage_queries, vectors, strict=True))
         papers = await select_papers(
             conn, models, cfg, question, queries, np.stack([by_query[q] for q in queries]), filters,
-            limit or cfg.agent.papers_for_answer, timings, counts,
+            limit or cfg.agent.papers_for_answer, timings, counts, carryover, carryover_boost,
         )  # fmt: skip
         passages = (
-            await select_passages(conn, models, cfg, question, passage_queries, vectors, papers, timings, counts)
+            await select_passages(
+                conn, models, cfg, question, passage_queries, vectors, papers, timings, counts, reuse_chunks
+            )
             if with_passages else []
         )  # fmt: skip
     return SearchResult(

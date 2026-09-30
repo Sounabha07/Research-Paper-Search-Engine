@@ -40,8 +40,15 @@ class Chunk:
 
 def document_text(doc: ParsedDoc) -> tuple[str, list[tuple[str, int, int]]]:
     """Canonical text (headings + paragraphs) and the (section, start, end) span of every sentence."""
+    text, spans, _ = document_layout(doc)
+    return text, spans
+
+
+def document_layout(doc: ParsedDoc) -> tuple[str, list[tuple[str, int, int]], list[tuple[str, int, int]]]:
+    """Like document_text, plus the (heading, start, end) span of every section heading (for the reader)."""
     parts: list[str] = []
     spans: list[tuple[str, int, int]] = []
+    heads: list[tuple[str, int, int]] = []
     pos = 0
 
     def add(s: str) -> int:
@@ -54,7 +61,8 @@ def document_text(doc: ParsedDoc) -> tuple[str, list[tuple[str, int, int]]]:
     for section in doc.sections:
         if parts:
             add(PARAGRAPH_SEP)
-        add(section.head)
+        head_start = add(section.head)
+        heads.append((section.head, head_start, head_start + len(section.head)))
         for para in section.paragraphs:
             add(PARAGRAPH_SEP)
             for i, sentence in enumerate(para):
@@ -62,7 +70,7 @@ def document_text(doc: ParsedDoc) -> tuple[str, list[tuple[str, int, int]]]:
                     add(SENTENCE_SEP)
                 start = add(sentence)
                 spans.append((section.head, start, start + len(sentence)))
-    return "".join(parts), spans
+    return "".join(parts), spans, heads
 
 
 def _split_long(text: str, span: tuple[str, int, int], tokens: int, max_tokens: int) -> list[tuple[str, int, int, int]]:
