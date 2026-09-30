@@ -6,7 +6,7 @@ COMPOSE := docker compose
 BACKEND := $(COMPOSE) run --rm --no-deps api
 
 .PHONY: help up down logs migrate status check-models test lint backup restore \
-        ingest-metadata landmarks warm score embed nightly eval
+        ingest-metadata landmarks warm fetch fulltext-report score embed nightly eval
 
 help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"

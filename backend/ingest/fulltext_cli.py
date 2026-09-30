@@ -16,7 +16,7 @@ from collections import Counter
 from typing import Any
 
 from core.config import AppConfig, get_config
-from core.db import raw_connection
+from core.db import create_pool, raw_connection
 from core.fetchq import enqueue_fulltext
 from core.logging import setup_logging
 from core.redis import get_redis
@@ -40,29 +40,25 @@ async def cmd_landmarks(cfg: AppConfig) -> None:
 
 
 async def cmd_warm(cfg: AppConfig, topic: str, n: int) -> None:
-    from core.embeddings import load_embedder
-    from retrieval.papers import search_papers
+    """Spec 7: paper-level search for the topic (with rerank), queue the top n not yet full text."""
+    from core.embeddings import load_embedder, load_reranker
+    from retrieval.search import SearchModels, search
 
-    embedder = await asyncio.to_thread(load_embedder, cfg)
-    conn = await raw_connection()
+    embedder, reranker = await asyncio.gather(
+        asyncio.to_thread(load_embedder, cfg), asyncio.to_thread(load_reranker, cfg)
+    )
+    models = SearchModels(embedder, reranker, cfg)
+    pool = await create_pool(min_size=1, max_size=1)
     try:
-        ranked = await search_papers(conn, embedder, cfg, topic)
-        ready = {
-            r["arxiv_id"]
-            for r in await conn.fetch(
-                "SELECT arxiv_id FROM papers WHERE arxiv_id = ANY($1) AND state IN ('ready', 'abstract_only')",
-                [a for a, _ in ranked],
-            )
-        }
-        picked = [a for a, _ in ranked if a not in ready][:n]
-        outcome = await enqueue_fulltext(conn, get_redis(), picked, urgent=False)
-        titles = {r["arxiv_id"]: r["title"] for r in await conn.fetch(
-            "SELECT arxiv_id, title FROM papers WHERE arxiv_id = ANY($1)", picked)}  # fmt: skip
+        async with pool.acquire() as conn:
+            result = await search(conn, models, cfg, topic, limit=cfg.retrieval.rerank_top_n, with_passages=False)
+            picked = [p for p in result.papers if p.state not in ("ready", "abstract_only")][:n]
+            outcome = await enqueue_fulltext(conn, get_redis(), [p.arxiv_id for p in picked], urgent=False)
     finally:
-        await conn.close()
-    print(f"warm {topic!r}: top {len(picked)} not yet ready -> {_summary(outcome)}")
-    for a in picked:
-        print(f"  {a:<14} {outcome[a]:<12} {titles.get(a, '')[:90]}")
+        await pool.close()
+    print(f"warm {topic!r}: top {len(picked)} not yet full text -> {_summary(outcome)}")
+    for p in picked:
+        print(f"  {p.arxiv_id:<14} {outcome[p.arxiv_id]:<12} {p.rerank_score:.3f}  {p.title[:85]}")
 
 
 async def cmd_fetch(ids: list[str], urgent: bool) -> None:

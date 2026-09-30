@@ -14,7 +14,6 @@ from ingest.citations import pagerank
 from ingest.janitor import run_janitor
 from ingest.pdftext import parse_pdf
 from ingest.references import _pick
-from retrieval.papers import rrf_fuse
 
 
 def test_pagerank_simple_graph() -> None:
@@ -22,12 +21,6 @@ def test_pagerank_simple_graph() -> None:
     rank = pagerank(4, np.array([0, 1, 2]), np.array([2, 2, 3]))
     assert rank.sum() == pytest.approx(1.0)
     assert rank[3] > rank[2] > rank[0] == pytest.approx(rank[1])
-
-
-def test_rrf_fuse() -> None:
-    fused = rrf_fuse([["a", "b", "c"], ["b", "d"]], k=60)
-    assert [d for d, _ in fused][:2] == ["b", "a"]
-    assert dict(fused)["b"] == pytest.approx(1 / 62 + 1 / 61)
 
 
 def test_pick_prefers_year() -> None:

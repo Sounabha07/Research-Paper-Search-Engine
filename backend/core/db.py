@@ -33,3 +33,18 @@ async def raw_connection() -> asyncpg.Connection:
     )
     await register_vector(conn)
     return conn
+
+
+async def _init_conn(conn: asyncpg.Connection) -> None:
+    await register_vector(conn)
+
+
+async def create_pool(min_size: int = 1, max_size: int = 5) -> asyncpg.Pool:
+    """asyncpg pool with pgvector codecs, for code that passes vectors (retrieval, pipeline)."""
+    s = get_settings()
+    pool = await asyncpg.create_pool(
+        host=s.postgres_host, port=s.postgres_port, user=s.postgres_user, password=require_env("POSTGRES_PASSWORD"),
+        database=s.postgres_db, min_size=min_size, max_size=max_size, init=_init_conn,
+    )  # fmt: skip
+    assert pool is not None
+    return pool

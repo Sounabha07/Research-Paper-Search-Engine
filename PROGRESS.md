@@ -5,7 +5,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - [x] 1. **Skeleton**: Compose (postgres, redis, grobid, api, worker, fetcher, frontend), config loading, migrations for all tables, LLM client with model check, health endpoints, Makefile.
 - [x] 2. **Metadata**: Kaggle stream + filter, landmark validation, tier 1 papers, metadata score, abstract embeddings + indexes, counts printed. `/admin` page.
 - [x] 3. **Full text on demand**: fetcher service with global limiter and two queues, GROBID parsing with bibliography, chunking, chunk embeddings, PDF lifecycle and janitor, landmark prefetch, `POST /papers/{id}/fulltext`, `make warm`, reference resolution into citation edges and stubs, citation scores and PageRank. Report the reference resolution rate.
-- [ ] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
+- [x] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
 - [ ] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
 - [ ] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
 - [ ] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
@@ -116,4 +116,32 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
   even at one request per 3.1 s (22 times in 15 min); PDF downloads were not throttled. The fetcher backs off
   exponentially and gives up on a metadata batch after 5 attempts (logged). Metadata jobs share the bulk queue,
   so they delay bulk PDF fetches; urgent fetches are unaffected.
+
+### Milestone 4 (done 2026-09-30, awaiting approval)
+- `retrieval/search.py` implements spec 11 in full: per-query keyword (websearch_to_tsquery, ts_rank_cd) and
+  vector (HNSW, `hnsw.ef_search=100`, `iterative_scan=relaxed_order`, re-sorted) top-100 over title+abstract
+  with filters, RRF (k=60), queries merged by summed RRF, top 50 reranked by bge-reranker-base on
+  (question, title + ". " + abstract), + `prior_boost_max * score` (score clamped to [0,1]); then passages:
+  keyword + vector over the chunks of `ready` papers for the question and each query, RRF, top 50 reranked,
+  <= 3 per paper, 25 total; papers without full text contribute their abstract (always kept).
+- `GET /search?q=&year_from=&year_to=&categories=&limit=&passages=` returns papers, passages, per-stage timings,
+  and the reranker device. `/search` page in the frontend (filters, badges, passages, "Get full text").
+- Models: sentence-transformers 6.1 CrossEncoder applies Sigmoid by default, so rerank scores are in [0,1] and
+  the 0.05 prior is on the same scale. Both models load in the API at startup, on CUDA (fp16).
+- Tried and reverted: relaxing the keyword query ("at least two informative words") when the strict AND query
+  matched nothing (it matched 0 for 2 of 5 test questions). On the 5 test questions it never improved a key
+  paper's rank and pushed FlashAttention/FlashAttention-2 out of the reranked 50 for the attention question
+  (#1/#3 without it). Back to the spec's strict websearch_to_tsquery; migration 0002 and its table removed.
+- 5-question test (warm = second pass; ms): embed 15-74, keyword 7-41, vector 3-16, fusion <0.5,
+  rerank 460-750 (50 papers + up to 50 passages), total 490-810. First pass after an API restart: vector
+  110-220, keyword 17-127, total 630-1,120. Right after a Docker restart (cold Postgres cache): total 1.2-3.0 s.
+  Reranker on cuda:0. Top-10 identical across passes.
+- Recall gaps seen in the test: "Fast Inference from Transformers via Speculative Decoding" (landmark) not in the
+  top 50 for the speculative-decoding question; DDPM and Latent Diffusion not in the top 50 for diffusion vs GANs.
+  For the sensitivity-conjecture question the reranker scores are low overall (best 0.30) but Huang's proof is #2.
+  Tuning waits for the milestone 8 eval (recall@10, ablations).
+- Memory: with the search models in the API, the idle stack uses 7.2 of 7.8 GB in the Docker VM (API 1.46 GB,
+  GROBID 3.06 GB, Postgres 0.97 GB, worker 0.66 GB). Docker hung once during this milestone (host had 1.3 GB
+  free) and was restarted; GROBID was stopped during the search test for headroom and restarted afterwards.
+  Needs a decision before milestone 5 (the answer pipeline adds the reranker to the worker).
 

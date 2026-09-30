@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.routers import search as search_router
+from retrieval.search import Filters, PaperHit, Passage, apply_prior, cap_per_paper, merge_query_lists, rrf_fuse
+
+
+def test_rrf_fuse_and_merge() -> None:
+    fused = rrf_fuse([["a", "b", "c"], ["b", "d"]], k=60)
+    assert [d for d, _ in fused][:2] == ["b", "a"]
+    assert dict(fused)["b"] == pytest.approx(1 / 62 + 1 / 61)
+    merged = merge_query_lists([[("a", 0.02), ("b", 0.01)], [("b", 0.015), ("c", 0.012)]])
+    assert [d for d, _ in merged] == ["b", "a", "c"]
+    assert dict(merged)["b"] == pytest.approx(0.025)
+
+
+def _hit(arxiv_id: str, rerank: float, prior: float) -> PaperHit:
+    return PaperHit(arxiv_id, "t", "a", 2024, [], "cs.LG", {}, "signals_done", prior, 0.0, rerank_score=rerank)
+
+
+def test_apply_prior_is_capped_and_filters() -> None:
+    hits = [_hit("a", 0.50, 1.0), _hit("b", 0.52, 0.0), _hit("c", 0.10, 5.0), _hit("d", 0.51, -1.0)]
+    out = apply_prior(hits, prior_boost_max=0.05, min_score=0.2)
+    assert [h.arxiv_id for h in out] == ["a", "b", "d"]  # c dropped below min score
+    assert out[0].final_score == pytest.approx(0.55)  # prior 1.0 -> +0.05
+    assert out[2].final_score == pytest.approx(0.51)  # negative prior clamped to 0
+    assert apply_prior([_hit("c", 0.1, 5.0)], 0.05, None)[0].final_score == pytest.approx(0.15)  # capped at 1
+
+
+def _p(arxiv_id: str, score: float) -> Passage:
+    return Passage(arxiv_id, "chunk", 1, "S", "x", 0, 1, 0.0, score)
+
+
+def test_cap_per_paper() -> None:
+    ps = [_p("a", 0.9), _p("a", 0.8), _p("a", 0.7), _p("a", 0.6), _p("b", 0.5), _p("c", 0.4)]
+    out = cap_per_paper(ps, max_per_paper=3, limit=5)
+    assert [(p.arxiv_id, p.rerank_score) for p in out] == [("a", 0.9), ("a", 0.8), ("a", 0.7), ("b", 0.5), ("c", 0.4)]
+    assert len(cap_per_paper(ps, 3, 2)) == 2
+
+
+def test_filters_sql() -> None:
+    cond, params = Filters().sql(3)
+    assert cond == "p.state <> 'discovered'" and params == []
+    cond, params = Filters(year_from=2022, year_to=2024, categories=("cs.LG", "math")).sql(3)
+    assert "make_date($3::int, 1, 1)" in cond and "make_date($4::int + 1, 1, 1)" in cond
+    assert "ANY($5::text[])" in cond and "split_part(c, '.', 1)" in cond
+    assert params == [2022, 2024, ["cs.LG", "math"]]
+
+
+def test_search_endpoint_needs_models() -> None:
+    app = FastAPI()
+    app.include_router(search_router.router)
+    r = TestClient(app).get("/search", params={"q": "lora"})
+    assert r.status_code == 503
+    assert TestClient(app).get("/search", params={"q": "x"}).status_code == 422  # min length 2
