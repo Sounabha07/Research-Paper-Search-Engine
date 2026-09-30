@@ -5,6 +5,7 @@ python -m ingest.fulltext_cli warm "topic" [--n N]   # paper-level search, queue
 python -m ingest.fulltext_cli fetch ID [ID ...] [--urgent]
 python -m ingest.fulltext_cli recent N               # queue the N most recent tier 1 papers (testing)
 python -m ingest.fulltext_cli report                 # fetch/parse timings, chunks, reference resolution
+python -m ingest.fulltext_cli resolve-all            # re-run reference resolution for all full-text papers
 """
 
 from __future__ import annotations
@@ -92,6 +93,41 @@ async def cmd_recent(n: int) -> None:
     print(f"recent: {len(ids)} -> {_summary(outcome)}")
 
 
+async def cmd_resolve_all(cfg: AppConfig) -> None:
+    from core.fetchq import enqueue_meta
+    from ingest.references import lock_citation_graph, resolve_for_paper
+
+    conn = await raw_connection()
+    methods: Counter[str] = Counter()
+    missing: set[str] = set()
+    try:
+        ids = [r["arxiv_id"] for r in await conn.fetch("SELECT arxiv_id FROM papers WHERE state = 'ready' ORDER BY 1")]
+        for arxiv_id in ids:
+            async with conn.transaction():
+                await lock_citation_graph(conn)
+                stats = await resolve_for_paper(conn, arxiv_id, cfg.corpus.stub_min_corpus_citations)
+            methods.update(stats.by_method)
+            missing.update(stats.missing_arxiv_ids)
+        async with conn.transaction():
+            await lock_citation_graph(conn)
+            removed = await conn.fetchval(
+                "WITH d AS (DELETE FROM stub_papers s WHERE NOT EXISTS"
+                " (SELECT 1 FROM references_raw r WHERE r.resolved_id = 'stub:' || s.id) RETURNING 1)"
+                " SELECT count(*) FROM d"
+            )
+            await conn.execute(
+                "UPDATE stub_papers s SET cited_by_count ="
+                " (SELECT count(*) FROM citation_edges e WHERE e.cited_id = 'stub:' || s.id)"
+            )
+    finally:
+        await conn.close()
+    batches = await enqueue_meta(get_redis(), sorted(missing))
+    print(
+        f"re-resolved {len(ids)} papers; methods {dict(methods)}; stubs removed {removed}; "
+        f"{len(missing)} ids in neither DB nor catalog -> {batches} arXiv API batches queued"
+    )
+
+
 def _stats(values: list[float], unit: str = "") -> str:
     if not values:
         return "n/a"
@@ -125,11 +161,14 @@ async def cmd_report() -> None:
                    count(*) FILTER (WHERE r.resolved_id IS NOT NULL AND r.resolved_id NOT LIKE 'stub:%'
                                     AND p.arxiv_id IS NOT NULL) AS to_paper,
                    count(*) FILTER (WHERE r.resolved_id IS NOT NULL AND r.resolved_id NOT LIKE 'stub:%'
-                                    AND p.arxiv_id IS NULL) AS to_unknown_arxiv_id,
+                                    AND p.arxiv_id IS NULL AND c.arxiv_id IS NOT NULL) AS to_catalog,
+                   count(*) FILTER (WHERE r.resolved_id IS NOT NULL AND r.resolved_id NOT LIKE 'stub:%'
+                                    AND p.arxiv_id IS NULL AND c.arxiv_id IS NULL) AS to_unknown_arxiv_id,
                    count(*) FILTER (WHERE r.resolved_id LIKE 'stub:%') AS to_stub,
                    count(*) FILTER (WHERE r.resolved_id IS NULL) AS unresolved,
                    count(*) FILTER (WHERE r.title IS NULL AND r.arxiv_id_found IS NULL) AS no_title_no_id
             FROM references_raw r LEFT JOIN papers p ON p.arxiv_id = r.resolved_id
+            LEFT JOIN arxiv_catalog c ON c.arxiv_id = r.resolved_id
             """
         )
         edges = await conn.fetchval("SELECT count(*) FROM citation_edges")
@@ -165,7 +204,8 @@ async def cmd_report() -> None:
 
     print(f"references: {refs['total']:,} total")
     print(f"  resolved to a corpus paper:   {pct(refs['to_paper'])}")
-    print(f"  arXiv id not yet in the DB:   {pct(refs['to_unknown_arxiv_id'])}")
+    print(f"  resolved to an arXiv paper outside the corpus (catalog): {pct(refs['to_catalog'])}")
+    print(f"  arXiv id in neither DB nor catalog: {pct(refs['to_unknown_arxiv_id'])}")
     print(f"  stub:                         {pct(refs['to_stub'])}")
     print(f"  unresolved:                   {pct(refs['unresolved'])}"
           f"  ({refs['no_title_no_id']:,} had neither a title nor an arXiv id)")  # fmt: skip
@@ -189,6 +229,7 @@ async def main() -> None:
     r = sub.add_parser("recent")
     r.add_argument("n", type=int)
     sub.add_parser("report")
+    sub.add_parser("resolve-all")
     args = parser.parse_args()
 
     setup_logging()
@@ -202,6 +243,8 @@ async def main() -> None:
             await cmd_fetch(args.ids, args.urgent)
         elif args.cmd == "recent":
             await cmd_recent(args.n)
+        elif args.cmd == "resolve-all":
+            await cmd_resolve_all(cfg)
         else:
             await cmd_report()
     finally:

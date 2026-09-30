@@ -145,3 +145,30 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
   free) and was restarted; GROBID was stopped during the search test for headroom and restarted afterwards.
   Needs a decision before milestone 5 (the answer pipeline adds the reranker to the worker).
 
+### Between milestones 4 and 5 (2026-09-30)
+- Memory: local models now live only in the worker (embedder + reranker, one shared GPU lock with the
+  pipeline). `GET /search` enqueues an arq `search_job` and waits for the result (~50 ms queue overhead;
+  worker `poll_delay` 0.05 s, `max_jobs` 16). The API no longer loads torch (1.46 GB -> 92 MB).
+  - Docker VM (7,792 MB), idle -> peak while parsing 10 papers and running 10 searches at once:
+    models in API, shared_buffers 2 GB: 7,191 MB (92%) idle, 7,379 MB (95%) peak;
+    models in worker, shared_buffers 2 GB: 5,815 MB (74%, before GROBID's first parse) idle, 7,297 MB (94%) peak;
+    models in worker, shared_buffers 1 GB: 6,282 MB (80%) idle, 6,595 MB (85%) peak.
+  - Peak was above 90% with 2 GB, so Postgres `shared_buffers` is now 1 GB (spec: 2 GB).
+- Search: `retrieval.rerank_min_score = 0.1` (papers below are dropped; an answer may use fewer than
+  `papers_for_answer`). Survivors of 12 for the 5 test questions: 12, 12, 12, 1, 12.
+  The sensitivity-conjecture question keeps only 1 paper: Huang's proof (1907.00847) scores 0.094 and is dropped.
+- Search: anchor channel (`retrieval.anchor_k = 5`): vector search + title keyword match (OR over the question's
+  words) over landmark/foundational papers only (partial index `papers_anchor`), RRF-fused; its top 5 always join
+  the rerank candidates. On the 5 test questions the top 10 did not change: anchors joined the candidates
+  (3-5 per question) but rerank scores saturate near 1.0, so e.g. the speculative-decoding landmark (2211.17192,
+  rerank 0.946) lands at #30 and Latent Diffusion (2112.10752, 0.308) at #45.
+- arXiv catalog (`arxiv_catalog`, migration 0002): every Kaggle record (id, title, title_norm, year,
+  primary_category), trigram index on title_norm. Filled by `make ingest-metadata` in the same stream, or
+  `make catalog`. 3,182,867 records, 3,182,775 unique (the Kaggle file repeats 92 ids), 1.37 GB with indexes,
+  17 min to load. Reference resolution now also tries exact title and trigram + year against the catalog after the
+  corpus; the arXiv API is only called for ids in neither table.
+  - Re-resolved the 178 full-text papers (8,475 references; `make resolve-refs`, 13 min):
+    resolved to any arXiv paper 42.8% -> 62.0% (corpus 42.8% -> 45.1%, catalog 0% -> 16.9%),
+    stubs 8.3% -> 4.6% (77 stubs removed), unresolved 48.4% -> 33.2%, ids needing the API 42 -> 14.
+    (Milestone 3 reported 42.6% on its 128 papers.) Citation edges 3,392 -> 5,617.
+

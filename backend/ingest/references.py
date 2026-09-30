@@ -1,7 +1,10 @@
 """Reference resolution into citation edges and stubs (spec 6.5).
 
 Order: (1) arXiv id in the reference, (2) exact normalized title, (3) trigram similarity
->= 0.9 on title plus year within 1. Unresolved titled references become stubs once
+>= 0.9 on title plus year within 1, against corpus papers; then (4) exact title and
+(5) trigram + year against `arxiv_catalog` (every arXiv record in the Kaggle snapshot), so
+cited arXiv papers outside the corpus resolve without the arXiv API. The API is only used
+for referenced ids that are in neither table (newer than the snapshot). Unresolved titled references become stubs once
 `stub_min_corpus_citations` full-text papers cite them. Edges exist only from full-text
 papers, so `fulltext_citations` = number of edges into a paper.
 """
@@ -96,6 +99,26 @@ async def _trigram_match(conn: asyncpg.Connection, title_norm: str, year: int) -
     return row["arxiv_id"] if row else None
 
 
+async def _catalog_exact(conn: asyncpg.Connection, title_norms: list[str]) -> dict[str, list[tuple[str, int | None]]]:
+    rows = await conn.fetch(
+        "SELECT title_norm, arxiv_id, year FROM arxiv_catalog WHERE title_norm = ANY($1::text[])", title_norms
+    )
+    out: dict[str, list[tuple[str, int | None]]] = {}
+    for r in rows:
+        out.setdefault(r["title_norm"], []).append((r["arxiv_id"], r["year"]))
+    return out
+
+
+async def _catalog_trigram(conn: asyncpg.Connection, title_norm: str, year: int) -> str | None:
+    row = await conn.fetchrow(
+        "SELECT arxiv_id FROM arxiv_catalog"
+        " WHERE title_norm % $1 AND similarity(title_norm, $1) >= $2 AND abs(year - $3) <= $4"
+        " ORDER BY similarity(title_norm, $1) DESC LIMIT 1",
+        title_norm, TRIGRAM_MIN, year, YEAR_TOLERANCE,
+    )  # fmt: skip
+    return row["arxiv_id"] if row else None
+
+
 async def resolve_for_paper(conn: asyncpg.Connection, citing_id: str, stub_min: int) -> ResolutionStats:
     """Resolve one full-text paper's references and rebuild its outgoing edges. Idempotent."""
     stats = ResolutionStats()
@@ -114,8 +137,15 @@ async def resolve_for_paper(conn: asyncpg.Connection, citing_id: str, stub_min: 
             method[r["position"]] = "by_arxiv_id"
     ids = list({resolved[p] for p in resolved})
     if ids:
-        known = {x["arxiv_id"] for x in await conn.fetch("SELECT arxiv_id FROM papers WHERE arxiv_id = ANY($1)", ids)}
-        stats.missing_arxiv_ids = sorted(set(ids) - known)
+        known = {
+            x["arxiv_id"]
+            for x in await conn.fetch(
+                "SELECT arxiv_id FROM papers WHERE arxiv_id = ANY($1)"
+                " UNION SELECT arxiv_id FROM arxiv_catalog WHERE arxiv_id = ANY($1)",
+                ids,
+            )
+        }
+        stats.missing_arxiv_ids = sorted(set(ids) - known)  # only these need the arXiv API
 
     # (2) exact normalized title
     pending = [r for r in refs if r["position"] not in resolved and _usable_title(r["title_norm"])]
@@ -137,6 +167,24 @@ async def resolve_for_paper(conn: asyncpg.Connection, citing_id: str, stub_min: 
         if trigram and trigram != citing_id:
             resolved[r["position"]] = trigram
             method[r["position"]] = "trigram_title"
+
+    # (4) exact title and (5) trigram + year against the full arXiv catalog
+    pending = [r for r in refs if r["position"] not in resolved and _usable_title(r["title_norm"])]
+    cat_exact = await _catalog_exact(conn, list({r["title_norm"] for r in pending}))
+    for r in pending:
+        cands = cat_exact.get(r["title_norm"])
+        if cands:
+            match = _pick(cands, r["year"])
+            if match != citing_id:
+                resolved[r["position"]] = match
+                method[r["position"]] = "catalog_exact_title"
+    for r in refs:
+        if r["position"] in resolved or not _usable_title(r["title_norm"]) or r["year"] is None:
+            continue
+        cat_trigram = await _catalog_trigram(conn, r["title_norm"], r["year"])
+        if cat_trigram and cat_trigram != citing_id:
+            resolved[r["position"]] = cat_trigram
+            method[r["position"]] = "catalog_trigram_title"
 
     await conn.executemany(
         "UPDATE references_raw SET resolved_id = $3 WHERE citing_id = $1 AND position = $2",

@@ -6,13 +6,13 @@ COMPOSE := docker compose
 BACKEND := $(COMPOSE) run --rm --no-deps api
 
 .PHONY: help up down logs migrate status check-models test lint backup restore \
-        ingest-metadata landmarks warm fetch fulltext-report score embed nightly eval
+        ingest-metadata landmarks warm fetch fulltext-report catalog resolve-refs score embed nightly eval
 
 help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"
 	@echo "backup | restore FILE=<name>.dump"
 	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
-	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report"
+	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report | catalog | resolve-refs"
 	@echo "nightly | eval  (later milestones)"
 
 up:
@@ -83,6 +83,13 @@ endif
 
 fulltext-report:
 	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli report
+
+# Compact catalog of every arXiv record (ingest-metadata also refreshes it); then re-resolve references.
+catalog:
+	$(COMPOSE) run --rm worker python -m ingest.catalog $(ARGS)
+
+resolve-refs:
+	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli resolve-all
 
 nightly eval:
 	@echo "make $@ arrives in milestone 8" && exit 1

@@ -25,6 +25,7 @@ from core.config import AppConfig, config_path, get_config, get_settings
 from core.db import raw_connection
 from core.logging import setup_logging
 from ingest import indexes, kaggle
+from ingest.catalog import CatalogLoader
 from ingest.landmarks import Landmark, load_landmarks, titles_match
 from ingest.signals import SignalExtractor
 from ingest.text import collapse_ws, normalize_title
@@ -311,14 +312,21 @@ async def run(zip_path: Path, cfg: AppConfig, dry_run: bool) -> Counts:
     mp = MetadataPass(cfg, load_landmarks(config_path().parent / cfg.corpus.landmarks_file))
     conn = None if dry_run else await raw_connection()
     dropped: list[str] = []
+    catalog: CatalogLoader | None = None
     try:
         if conn is not None:
             await conn.execute(_STAGE_DDL)
+            catalog = CatalogLoader(conn)
+            await catalog.start()
             if await conn.fetchval("SELECT count(*) FROM papers") < BULK_LOAD_MAX_EXISTING:
                 dropped = await indexes.drop_secondary(conn)
         batch: list[PaperRow] = []
         started = time.monotonic()
         for rec in kaggle.iter_records(zip_path):
+            if catalog is not None and rec and rec.get("id") and rec.get("title"):
+                v1 = parse_v1_date(rec)
+                cats = (rec.get("categories") or "").split()
+                await catalog.add(str(rec["id"]), rec["title"], v1.year if v1 else None, cats[0] if cats else None)
             row = mp.process(rec)
             if row is not None and conn is not None:
                 batch.append(row)
@@ -332,6 +340,9 @@ async def run(zip_path: Path, cfg: AppConfig, dry_run: bool) -> Counts:
                 )
         if batch and conn is not None:
             await write_batch(conn, batch, mp.counts)
+        if catalog is not None:
+            await catalog.finish()
+            log.info("arxiv catalog loaded", extra={"records": catalog.count, "unique": catalog.unique})
         mp.finish()
     finally:
         if conn is not None:
