@@ -1,7 +1,8 @@
 """Hybrid retrieval (spec 11): paper selection, then passage selection within the selected papers.
 
 Papers:   per query keyword top-k + vector top-k over title+abstract (with filters), RRF-fused;
-          queries merged by summed RRF; top `rerank_top_n` reranked with the cross-encoder on
+          queries merged by summed RRF; top `rerank_top_n`, plus the top `anchor_k` landmark/foundational
+          papers (anchor channel: vector + title keyword over those papers only), reranked with the cross-encoder on
           (question, title + ". " + abstract); + capped prior `prior_boost_max * score`.
 Passages: for `ready` papers, keyword + vector over their chunks for the question and each query,
           RRF-fused, top `rerank_top_n` reranked, at most `max_passages_per_paper` per paper.
@@ -112,6 +113,7 @@ class PaperHit:
     rrf: float
     rerank_score: float = 0.0
     final_score: float = 0.0
+    via_anchor: bool = False  # joined the rerank candidates through the anchor channel only
 
 
 @dataclass
@@ -221,6 +223,33 @@ async def vector_papers(conn: asyncpg.Connection, vec: HalfVector, filters: Filt
     return [r["arxiv_id"] for r in rows]
 
 
+ANCHOR_FILTER = "(p.is_landmark OR p.is_foundational)"  # partial index papers_anchor
+
+
+async def anchor_papers(conn: asyncpg.Connection, query: str, vec: HalfVector, filters: Filters, k: int) -> list[str]:
+    """Anchor channel: vector search and title keyword match over landmark/foundational papers only.
+
+    The anchor set is small (~100s of papers), so both are exact scans via the partial index. Titles use an
+    OR query over the question's words (an AND query would almost never match a title).
+    """
+    cond, params = filters.sql(3)
+    vector = await conn.fetch(
+        f"SELECT p.arxiv_id FROM papers p WHERE {ANCHOR_FILTER} AND {cond}"
+        " ORDER BY p.abstract_embedding <=> $1 LIMIT $2",
+        vec, k, *params,
+    )  # fmt: skip
+    title = await conn.fetch(
+        f"SELECT p.arxiv_id FROM papers p,"
+        " replace(plainto_tsquery('english', $1)::text, ' & ', ' | ') AS qt"
+        f" WHERE qt <> '' AND {ANCHOR_FILTER} AND {cond}"
+        " AND to_tsvector('english', p.title) @@ qt::tsquery"
+        " ORDER BY ts_rank_cd(to_tsvector('english', p.title), qt::tsquery) DESC LIMIT $2",
+        query, k, *params,
+    )  # fmt: skip
+    fused = rrf_fuse([[r["arxiv_id"] for r in vector], [r["arxiv_id"] for r in title]], 60)
+    return [a for a, _ in fused[:k]]
+
+
 async def keyword_chunks(conn: asyncpg.Connection, query: str, papers: list[str], k: int) -> list[int]:
     rows = await conn.fetch(
         "SELECT id FROM chunks WHERE arxiv_id = ANY($3::text[]) AND tsv @@ websearch_to_tsquery('english', $1)"
@@ -268,7 +297,21 @@ async def select_papers(
             fused_per_query.append(rrf_fuse([kw, vc], r.rrf_k))
     with timings.stage("papers.fusion"):
         candidates = merge_query_lists(fused_per_query)[: r.rerank_top_n]
+    anchor_only: set[str] = set()
+    if r.anchor_k > 0:
+        anchor_lists = []
+        with timings.stage("papers.anchor"):
+            for q, vec in zip(queries, vectors, strict=True):
+                anchor_lists.append(await anchor_papers(conn, q, HalfVector(vec), filters, r.anchor_k))
+        present = {a for a, _ in candidates}
+        for a, _ in merge_query_lists([[(x, 1.0 / (i + 1)) for i, x in enumerate(lst)] for lst in anchor_lists])[
+            : r.anchor_k
+        ]:
+            if a not in present:
+                candidates.append((a, 0.0))
+                anchor_only.add(a)
     counts["papers.candidates"] = len(candidates)
+    counts["papers.anchor_added"] = len(anchor_only)
     if not candidates:
         return []
 
@@ -292,7 +335,10 @@ async def select_papers(
         scores = await models.rerank(question, [abstract_text(h.title, h.abstract) for h in hits])
     for h, s in zip(hits, scores, strict=True):
         h.rerank_score = s
-    return apply_prior(hits, r.prior_boost_max, r.rerank_min_score)[:limit]
+        h.via_anchor = h.arxiv_id in anchor_only
+    selected = apply_prior(hits, r.prior_boost_max, r.rerank_min_score)
+    counts["papers.above_min_score"] = len(selected)
+    return selected[:limit]
 
 
 async def select_passages(
@@ -409,7 +455,7 @@ def result_to_api(result: SearchResult) -> dict[str, Any]:
                 "arxiv_id": p.arxiv_id, "title": p.title, "year": p.year, "authors": author_names(p.authors),
                 "primary_category": p.primary_category, "badges": p.badges, "full_text": p.state == "ready",
                 "rerank_score": round(p.rerank_score, 4), "prior": round(p.prior, 4),
-                "final_score": round(p.final_score, 4),
+                "final_score": round(p.final_score, 4), "via_anchor": p.via_anchor,
             }
             for p in result.papers
         ],

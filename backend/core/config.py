@@ -59,6 +59,7 @@ class RetrievalConfig(_Section):
     chunk_vector_k: int
     rrf_k: int
     rerank_min_score: float | None
+    anchor_k: int
     hnsw_ef_search: int
     prior_boost_max: float
 

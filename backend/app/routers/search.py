@@ -29,6 +29,7 @@ class PaperOut(BaseModel):
     rerank_score: float
     prior: float
     final_score: float
+    via_anchor: bool = False
 
 
 class PassageOut(BaseModel):

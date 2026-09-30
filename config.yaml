@@ -34,7 +34,8 @@ retrieval:
   chunk_keyword_k: 50                # within the selected papers only
   chunk_vector_k: 50
   rrf_k: 60
-  rerank_min_score: null             # tune with eval
+  rerank_min_score: 0.1              # papers below are dropped (an answer may use fewer than papers_for_answer); tune with eval
+  anchor_k: 5                        # top landmark/foundational papers that always join the rerank candidates
   hnsw_ef_search: 100
   prior_boost_max: 0.05              # composite-score boost after rerank, capped
 agent:
