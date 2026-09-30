@@ -206,13 +206,33 @@ def test_clean_summary() -> None:
 
 
 def test_source_status() -> None:
-    assert source_status(False, False, None, None, 2022) == "preprint (2022)"
-    assert source_status(False, True, "NeurIPS 2023", None, 2023) == "peer-reviewed: NeurIPS 2023"
-    assert (
-        source_status(False, False, None, "Ann. of Math. 193 (2021)", 2020) == "peer-reviewed: Ann. of Math. 193 (2021)"
-    )
-    assert source_status(True, False, None, None, 2017) == "landmark"
-    assert source_status(True, True, "NeurIPS", None, 2017) == "landmark, peer-reviewed: NeurIPS"
+    def row(
+        landmark: bool = False, foundational: bool = False, venue: str | None = None, jref: str | None = None
+    ) -> dict[str, Any]:
+        return {"is_landmark": landmark, "is_foundational": foundational, "venue_accepted": venue is not None,
+                "venue_name": venue, "journal_ref": jref}  # fmt: skip
+
+    assert source_status(row(), 2022) == "preprint (2022)"
+    assert source_status(row(venue="NeurIPS 2023"), 2023) == "peer-reviewed: NeurIPS 2023"
+    assert source_status(row(jref="Ann. of Math. 193 (2021)"), 2020) == "peer-reviewed: Ann. of Math. 193 (2021)"
+    assert source_status(row(landmark=True, venue="NeurIPS"), 2017) == "landmark, peer-reviewed: NeurIPS"
+    # landmark and foundational papers are never preprints, even with no venue in the metadata (QLoRA: none)
+    assert source_status(row(landmark=True), 2023) == "landmark"
+    assert source_status(row(foundational=True), 2015) == "foundational"
+
+
+def test_spurious_preprint_attribution_is_not_kept(cfg: AppConfig) -> None:
+    from agent.run import SPURIOUS_ATTRIBUTION, _apply_verdict
+
+    sources = {"c:1": SourceText("QLoRA", "QLoRA is the first method that enables finetuning 33B models on one GPU.",
+                                 "landmark", "Dettmers")}  # fmt: skip
+    d = DraftSentence("S", "QLoRA is the first method that enables finetuning 33B models on one GPU.", ["c:1"])
+    v = prompts.Verdict(index=0, verdict="partial", span="QLoRA is the first method that enables finetuning 33B",
+                        rewrite="A 2024 preprint by Dettmers claims QLoRA is the first method to do so.")  # fmt: skip
+    f = _apply_verdict(0, d, v, sources, True, True)
+    assert f.text == d.with_tags() and f.reason == SPURIOUS_ATTRIBUTION  # original kept for the re-check
+    preprint = {"c:1": SourceText("X", sources["c:1"].text, "preprint (2024)", "Dettmers")}
+    assert _apply_verdict(0, d, v, preprint, True, True).reason is None  # a real preprint: rewrite kept
 
 
 def test_format_notes_carry_status_and_author() -> None:
@@ -270,3 +290,25 @@ def test_mostly_untagged() -> None:
     assert mostly_untagged("One claim. Two claims. Three [[c:1]].", allowed)
     assert not mostly_untagged("One [[c:1]]. Two [[c:2]]. Three.", allowed)
     assert mostly_untagged("", allowed)
+
+
+async def test_spurious_attribution_original_passes_recheck(cfg: AppConfig) -> None:
+    sources = {"c:1": SourceText("QLoRA", "QLoRA reduces memory enough to finetune a 65B model on a single 48GB GPU.",
+                                 "landmark", "Dettmers")}  # fmt: skip
+    d = DraftSentence("S", "QLoRA finetunes a 65B model on a single 48GB GPU.", ["c:1"])
+    first = prompts.VerifyOut(results=[prompts.Verdict(
+        index=0, verdict="partial", span="finetune a 65B model on a single 48GB GPU",
+        rewrite="A 2024 preprint by Dettmers reports that QLoRA finetunes a 65B model on a single 48GB GPU.",
+    )])  # fmt: skip
+    ok = prompts.VerifyOut(
+        results=[prompts.Verdict(index=0, verdict="supported", span="finetune a 65B model on a single 48GB GPU")]
+    )
+    calls: list[str] = []
+
+    def respond(prompt: str) -> prompts.VerifyOut:
+        calls.append(prompt)
+        return first if len(calls) == 1 else ok
+
+    finals = await step_verify(_state(cfg, FakeLLM({"verify": respond})), [d], sources)
+    assert [(f.verdict, f.text, f.reason) for f in finals] == [("supported", d.with_tags(), None)]
+    assert "NOT a preprint" in calls[0]

@@ -116,6 +116,10 @@ class FeedsConfig(_Section):
     keyword_boost: float
 
 
+class JobsConfig(_Section):
+    oai_harvest_enabled: bool  # nightly OAI-PMH harvest; off: arXiv answers ListRecords with HTTP 406
+
+
 class AppConfig(_Section):
     corpus: CorpusConfig
     score_weights: ScoreWeights
@@ -128,6 +132,7 @@ class AppConfig(_Section):
     llm_client: LLMClientConfig
     arxiv: ArxivConfig
     feeds: FeedsConfig
+    jobs: JobsConfig
     llm_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 

@@ -118,10 +118,19 @@ async def recompute_scores_job(ctx: dict[str, Any]) -> str:
 
 
 async def nightly_job(ctx: dict[str, Any]) -> str:
-    """Spec 16, 02:00 UTC: queue the OAI-PMH harvest in the fetcher; it enqueues post_harvest_job when done."""
+    """Spec 16, 02:00 UTC: queue the OAI-PMH harvest in the fetcher (it enqueues post_harvest_job when done).
+    Disabled by config: arXiv refuses ListRecords; the weekly snapshot job brings new papers instead."""
     from ingest.nightly import queue_harvest
 
-    return f"harvest queued from {await queue_harvest(get_redis())}"
+    frm = await queue_harvest(get_redis())
+    return f"harvest queued from {frm}" if frm else "OAI-PMH harvest disabled"
+
+
+async def weekly_snapshot_job(ctx: dict[str, Any]) -> str:
+    """Mondays 00:30 UTC: latest Kaggle snapshot, new/changed papers only, then the post-harvest steps."""
+    from ingest.weekly import weekly_snapshot
+
+    return await weekly_snapshot(ctx["cfg"])
 
 
 async def post_harvest_job(ctx: dict[str, Any]) -> str:
@@ -224,13 +233,15 @@ class WorkerSettings:
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(resolve_refs_job, max_tries=3, timeout=900, keep_result=0),
         func(post_harvest_job, max_tries=1, timeout=6 * 3600, keep_result=3600),
+        func(weekly_snapshot_job, max_tries=1, timeout=8 * 3600, keep_result=3600),
         func(digest_job, max_tries=1, timeout=1800, keep_result=3600),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),
         func(recompute_scores_job, timeout=3600, max_tries=1),
     ]
     cron_jobs: ClassVar[list[Any]] = [
         cron(janitor_job, minute={0, 30}, run_at_startup=True),
-        cron(nightly_job, hour=2, minute=0, unique=True),  # container clock is UTC
+        cron(nightly_job, hour=2, minute=0, unique=True),  # container clock is UTC; a no-op while disabled
+        cron(weekly_snapshot_job, weekday="mon", hour=0, minute=30, unique=True),  # before the 03:00 digests
         cron(digest_job, weekday="mon", hour=3, minute=0, unique=True),
     ]
     on_startup = startup

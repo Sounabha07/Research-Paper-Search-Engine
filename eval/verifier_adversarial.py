@@ -22,7 +22,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import yaml
-
 from agent.text import DraftSentence
 from core.config import get_config
 from core.db import raw_connection
@@ -57,7 +56,8 @@ async def paper_meta(ids: set[str]) -> dict[str, tuple[str, str]]:
     conn = await raw_connection()
     try:
         rows = await conn.fetch(
-            "SELECT c.id::text AS cid, p.arxiv_id, p.is_landmark, p.venue_accepted, p.venue_name, p.journal_ref,"
+            "SELECT c.id::text AS cid, p.arxiv_id, p.is_landmark, p.is_foundational, p.venue_accepted, p.venue_name,"
+            " p.journal_ref,"
             " extract(year FROM p.v1_date)::int AS year, p.authors FROM papers p LEFT JOIN chunks c"
             " ON c.arxiv_id = p.arxiv_id AND c.id = ANY($1::bigint[]) WHERE p.arxiv_id = ANY($2) OR c.id IS NOT NULL",
             [int(i[2:]) for i in ids if i.startswith("c:")], [i[2:] for i in ids if i.startswith("a:")],
@@ -66,7 +66,7 @@ async def paper_meta(ids: set[str]) -> dict[str, tuple[str, str]]:
         await conn.close()
     out = {}
     for r in rows:
-        meta = (source_status(r["is_landmark"], r["venue_accepted"], r["venue_name"], r["journal_ref"], r["year"]),
+        meta = (source_status(r, r["year"]),
                 author_names(r["authors"]))  # fmt: skip
         if r["cid"]:
             out[f"c:{r['cid']}"] = meta
@@ -80,7 +80,7 @@ async def verify(
 ) -> list[Any]:  # fmt: skip
     cfg = get_config()
     llm = LLMClient(cfg)  # no cache, no DB logging: fresh verdicts every run
-    import agent.run as run
+    from agent import run
 
     if hasattr(run, "verify_sentences"):
         from agent.verify import SourceText
@@ -148,7 +148,9 @@ async def main() -> None:
     for r in rows:
         reason = f"  ({r['altered_reason']})" if r["altered_reason"] else ""
         status = "CAUGHT" if r["caught"] else "missed"
-        print(f"  #{r['id']:<2} {r['type']:<22} original: {r['original']:<20} altered: {r['altered']:<20} {status}{reason}")
+        print(
+            f"  #{r['id']:<2} {r['type']:<22} original: {r['original']:<20} altered: {r['altered']:<20} {status}{reason}"
+        )
         if r["rewrite"]:
             print(f"      rewrite: {r['rewrite']}")
     caught = sum(r["caught"] for r in rows)
@@ -163,7 +165,9 @@ async def main() -> None:
     print("by type: " + ", ".join(f"{t} {sum(v)}/{len(v)}" for t, v in by_type.items()))
     expected = [r for r in rows if r["expected"]]
     if expected:
-        print(f"expected verdict (partial, rewritten with attribution): {sum(r['as_expected'] for r in expected)}/{len(expected)}")
+        print(
+            f"expected verdict (partial, rewritten with attribution): {sum(r['as_expected'] for r in expected)}/{len(expected)}"
+        )
     if args.out:
         Path(args.out).write_text(json.dumps({"mode": mode, "rows": rows}, indent=1), encoding="utf-8")
 

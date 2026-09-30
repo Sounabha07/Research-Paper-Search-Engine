@@ -13,6 +13,7 @@ Ablations (patched in this process only; production code is unchanged):
   --no-keyword    keyword channels off (papers, chunks, and the title part of the anchor channel)
   --no-vector     vector channels off (papers, chunks, and the vector part of the anchor channel)
   --no-rerank     no cross-encoder: candidates keep their fused (RRF) order
+  kw-or           (in --ablations) experiment: keyword channel with OR between terms, ranked by ts_rank_cd
   --embedding M   another embedding model; abstract and chunk embeddings are built once into schema
                   eval_emb_<model> (resumable; the whole corpus: hours for a base-size model)
   --chunk-size N  full-text papers re-chunked from parsed/ with target N tokens into schema eval_cs<N>;
@@ -134,6 +135,19 @@ def anchor_variant(
         return [a for a, _ in S.rrf_fuse(lists, 60)[:k]]
 
     return anchor
+
+
+async def keyword_papers_or(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int) -> list[str]:
+    """Experiment (--ablations kw-or): the keyword channel with OR instead of AND between the question's words,
+    ranked by ts_rank_cd, so it returns papers matching most (not all) of the terms."""
+    cond, params = filters.sql(3)
+    rows = await conn.fetch(
+        "SELECT p.arxiv_id FROM papers p, replace(plainto_tsquery('english', $1)::text, ' & ', ' | ') AS qt"
+        f" WHERE qt <> '' AND p.abstract_tsv @@ qt::tsquery AND {cond}"
+        " ORDER BY ts_rank_cd(p.abstract_tsv, qt::tsquery) DESC LIMIT $2",
+        query, k, *params,
+    )  # fmt: skip
+    return [r["arxiv_id"] for r in rows]
 
 
 class RankOnlyModels(S.SearchModels):
@@ -294,6 +308,7 @@ async def retrieval_eval(
             exp = q["expected_papers"]
             rows.append({
                 "id": q["id"], "topic": q["topic"], "mode": q["mode"], "question": q["question"], "expected": exp,
+                "field": q["field"], "landmark": q["landmark"], "named": q["named"],
                 "recall_at_10": recall_at(exp, ranked), "rr": reciprocal_rank(exp, ranked),
                 "passage_hit_at_10": float(bool(set(exp) & set(passage_papers))),
                 "expected_full_text": [a for a in exp if a in ready],
@@ -303,6 +318,7 @@ async def retrieval_eval(
         await conn.close()
     lat = [r["latency_ms"] for r in rows]
     return {
+        "by_tag": by_tag(rows),
         "questions": len(rows),
         "recall_at_10": round(statistics.mean(r["recall_at_10"] for r in rows), 4) if rows else None,
         "mrr": round(statistics.mean(r["rr"] for r in rows), 4) if rows else None,
@@ -310,6 +326,23 @@ async def retrieval_eval(
         "latency_ms_p50": percentile(lat, 0.5), "latency_ms_p95": percentile(lat, 0.95),
         "rows": rows,
     }  # fmt: skip
+
+
+TAGS = ("landmark", "named", "field", "mode")
+
+
+def by_tag(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """recall@10 and MRR for each value of each tag, e.g. {"landmark=false": {"n": 17, ...}}."""
+    out: dict[str, dict[str, Any]] = {}
+    for tag in TAGS:
+        for value in sorted({str(r[tag]).lower() for r in rows}):
+            sel = [r for r in rows if str(r[tag]).lower() == value]
+            out[f"{tag}={value}"] = {
+                "n": len(sel),
+                "recall_at_10": round(statistics.mean(r["recall_at_10"] for r in sel), 4),
+                "mrr": round(statistics.mean(r["rr"] for r in sel), 4),
+            }
+    return out
 
 
 # ---- answer eval (through the API) ---------------------------------------------------------------------
@@ -324,7 +357,11 @@ def _http(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
 
 async def answer_eval(questions: list[dict[str, Any]], sample_n: int, stamp: str) -> dict[str, Any]:
     rows, pairs = [], []
+    failed_in_a_row = 0
     for q in questions:
+        if failed_in_a_row >= 2:  # e.g. the free-tier daily quota is used up: stop instead of failing every run
+            print(f"  stopping: 2 runs failed in a row; not run: {[x['id'] for x in questions[questions.index(q) :]]}")
+            break
         created = await asyncio.to_thread(_http, "POST", "/threads", {"question": q["question"], "mode": q["mode"]})
         run_id = created["run_id"]
         deadline = time.monotonic() + 600
@@ -334,6 +371,7 @@ async def answer_eval(questions: list[dict[str, Any]], sample_n: int, stamp: str
             if run["status"] not in ("queued", "running"):
                 break
             await asyncio.sleep(3)
+        failed_in_a_row = failed_in_a_row + 1 if run.get("status") == "failed" else 0
         kept = [s for s in run.get("sentences", []) if s["verdict"] != "unsupported_removed"]
         selected = [p["arxiv_id"] for p in run.get("selected_papers", [])]
         cited = sorted({run["sources"][sid]["arxiv_id"] for s in kept for sid in s["sources"] if sid in run["sources"]})
@@ -387,6 +425,15 @@ def markdown(result: dict[str, Any]) -> str:
     for name, r in result["retrieval"].items():
         lines.append(f"| {name} | {r['recall_at_10']:.3f} | {r['mrr']:.3f} | {r['passage_hit_at_10']:.3f} | "
                      f"{r['latency_ms_p50']:.0f} ms | {r['latency_ms_p95']:.0f} ms |")  # fmt: skip
+    tags = list(next(iter(result["retrieval"].values()))["by_tag"])
+    lines += ["", "Recall@10 / MRR by tag", "", "| variant | " + " | ".join(tags) + " |",
+              "|---|" + "---|" * len(tags)]  # fmt: skip
+    lines.append(
+        "| n | " + " | ".join(str(next(iter(result["retrieval"].values()))["by_tag"][t]["n"]) for t in tags) + " |"
+    )
+    for name, r in result["retrieval"].items():
+        cells = [f"{r['by_tag'][t]['recall_at_10']:.2f} / {r['by_tag'][t]['mrr']:.2f}" for t in tags]
+        lines.append(f"| {name} | " + " | ".join(cells) + " |")
     base = next(iter(result["retrieval"].values()))
     by_topic: dict[str, list[float]] = {}
     for row in base["rows"]:
@@ -453,6 +500,8 @@ async def main() -> None:
             }
         if "no-vector" in flags:
             patches |= {"vector_papers": _empty, "vector_chunks": _empty, "anchor_papers": anchor_variant(False, True)}
+        if "kw-or" in flags:
+            patches |= {"keyword_papers": keyword_papers_or}
         if "no-rerank" in flags:
             vmodels = RankOnlyModels(embedder, reranker, cfg)
             vcfg = cfg.model_copy(update={"retrieval": cfg.retrieval.model_copy(update={"rerank_min_score": None})})

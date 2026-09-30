@@ -6,7 +6,7 @@ COMPOSE := docker compose
 BACKEND := $(COMPOSE) run --rm --no-deps api
 
 .PHONY: help up down logs migrate status check-models test lint backup restore \
-        ingest-metadata landmarks warm fetch fulltext-report catalog resolve-refs score embed eval-verifier nightly eval
+        ingest-metadata landmarks warm fetch fulltext-report catalog resolve-refs score embed eval-verifier snapshot nightly eval
 
 help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"
@@ -14,7 +14,7 @@ help:
 	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
 	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report | catalog | resolve-refs"
 	@echo "eval-verifier [ARGS=--legacy|--no-names]"
-	@echo "nightly | eval [ARGS=\"--answers | --no-keyword | --no-vector | --no-rerank | --embedding M | --chunk-size N\"]"
+	@echo "snapshot | nightly (disabled) | eval [ARGS=\"--answers | --no-keyword | --no-vector | --no-rerank | --embedding M | --chunk-size N\"]"
 
 up:
 	$(COMPOSE) up -d --build postgres redis grobid
@@ -97,7 +97,12 @@ EVAL_RUN := $(COMPOSE) run --rm -v ./eval:/app/eval -e PYTHONPATH=/app/backend w
 eval-verifier:
 	$(EVAL_RUN) /app/eval/verifier_adversarial.py $(ARGS)
 
-# Nightly job now (normally 02:00 UTC in the worker): OAI-PMH harvest in the fetcher, then embeddings and scores.
+# Weekly job now (normally Mondays 00:30 UTC in the worker): latest Kaggle snapshot, new/changed papers only,
+# then foundational papers, embeddings, scores.
+snapshot:
+	$(COMPOSE) run --rm --no-deps worker python -m ingest.weekly
+
+# Nightly OAI-PMH harvest now. Disabled in config (jobs.oai_harvest_enabled): arXiv refuses ListRecords (HTTP 406).
 nightly:
 	$(COMPOSE) run --rm --no-deps worker python -m ingest.nightly
 

@@ -108,6 +108,8 @@ Format and rules:
   a general conclusion about a field). When a strong claim's only support is a source marked "preprint", attribute
   it in the sentence ("a 2022 preprint by Fukuyama claims a proof of ...", "Zhao et al. report state-of-the-art
   ...") and never state it as settled fact. A single preprint cannot resolve an open problem.
+- The status labels (landmark, foundational, peer-reviewed, preprint) are for you: never write them into the answer
+  ("the landmark paper by ...") except the word "preprint" in a required attribution.
 - Describing what a paper proposes, how its method works, or what it measured needs no hedge, even for preprints
   ("TaylorShift computes attention in linear time using a Taylor softmax.")."""
 

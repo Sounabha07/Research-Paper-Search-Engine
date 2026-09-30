@@ -126,6 +126,8 @@ class Counts:
     inserted: int = 0
     updated: int = 0
     unchanged: int = 0
+    skipped_unchanged: int = 0  # weekly job: records older than the last snapshot, not processed
+    max_update_date: str = ""
 
 
 class MetadataPass:
@@ -308,7 +310,9 @@ def format_counts(c: Counts, cutoff: datetime, dry_run: bool) -> str:
     return "\n".join(lines)
 
 
-async def run(zip_path: Path, cfg: AppConfig, dry_run: bool) -> Counts:
+async def run(zip_path: Path, cfg: AppConfig, dry_run: bool, since: str | None = None) -> Counts:
+    """Stream the snapshot into tier 1. With `since` (YYYY-MM-DD), only records whose update_date is on or after it
+    are processed (the weekly job: new and changed papers); `counts.max_update_date` is the newest one seen."""
     mp = MetadataPass(cfg, load_landmarks(config_path().parent / cfg.corpus.landmarks_file))
     conn = None if dry_run else await raw_connection()
     dropped: list[str] = []
@@ -316,13 +320,20 @@ async def run(zip_path: Path, cfg: AppConfig, dry_run: bool) -> Counts:
     try:
         if conn is not None:
             await conn.execute(_STAGE_DDL)
-            catalog = CatalogLoader(conn)
+            catalog = CatalogLoader(conn, incremental=since is not None)
             await catalog.start()
             if await conn.fetchval("SELECT count(*) FROM papers") < BULK_LOAD_MAX_EXISTING:
                 dropped = await indexes.drop_secondary(conn)
         batch: list[PaperRow] = []
         started = time.monotonic()
         for rec in kaggle.iter_records(zip_path):
+            if rec and rec.get("update_date"):
+                ud = str(rec["update_date"])
+                if ud > mp.counts.max_update_date:
+                    mp.counts.max_update_date = ud
+                if since is not None and ud < since:
+                    mp.counts.skipped_unchanged += 1
+                    continue
             if catalog is not None and rec and rec.get("id") and rec.get("title"):
                 v1 = parse_v1_date(rec)
                 cats = (rec.get("categories") or "").split()

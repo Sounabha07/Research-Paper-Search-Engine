@@ -40,8 +40,9 @@ class CatalogLoader:
     """Streams into an unconstrained staging table (the Kaggle file repeats some ids), then keeps
     one row per id."""
 
-    def __init__(self, conn: asyncpg.Connection) -> None:
+    def __init__(self, conn: asyncpg.Connection, incremental: bool = False) -> None:
         self.conn = conn
+        self.incremental = incremental  # weekly snapshot: upsert the new/changed records, keep the rest
         self.rows: list[tuple[Any, ...]] = []
         self.count = 0
         self.unique = 0
@@ -71,6 +72,16 @@ class CatalogLoader:
     async def finish(self) -> float:
         await self.flush()
         started = time.monotonic()
+        if self.incremental:
+            status = await self.conn.execute(
+                "INSERT INTO arxiv_catalog SELECT DISTINCT ON (arxiv_id) arxiv_id, title, title_norm, year,"
+                " primary_category FROM arxiv_catalog_load ORDER BY arxiv_id, year DESC NULLS LAST"
+                " ON CONFLICT (arxiv_id) DO UPDATE SET title = EXCLUDED.title, title_norm = EXCLUDED.title_norm,"
+                " year = EXCLUDED.year, primary_category = EXCLUDED.primary_category"
+            )
+            self.unique = int(status.split()[-1])
+            await self.conn.execute("DROP TABLE arxiv_catalog_load")
+            return time.monotonic() - started
         for name in _INDEXES:
             await self.conn.execute(f"DROP INDEX IF EXISTS {name}")
         async with self.conn.transaction():

@@ -499,3 +499,72 @@ a results table to fill after the full eval, and a demo video placeholder.
 
 Also: the frontend image build no longer needs GROBID stopped (10 GB VM, GROBID capped): built with GROBID running,
 no kill.
+
+### Milestone 8, continued (2026-09-30)
+Questions
+- Every question tagged `landmark` (an expected paper is landmark/foundational; checked against the DB), `named`
+  (question contains the method/model name, a distinctive title phrase, or the named conjecture), `field` (cs/math;
+  checked). 8 named-landmark ML questions (PagedAttention, LLM.int8(), ZeRO, DPO, DPR, ViT, GAT/GCN, PGD) replaced by
+  5 math + 3 non-ML CS questions with recent (2022+), non-landmark expected papers, described without naming them:
+  union-closed sets (2211.09055), moving sofa (2411.19826), sphere packing lower bound (2312.10026), bunkbed
+  (2410.02545), Kakeya in 3D (2502.17655), negative-weight SSSP (2203.03456), universal optimality of Dijkstra
+  (2311.11793), deterministic min-cut (2401.05627). Totals: 32 cs / 8 math, 23 landmark / 17 not, 27 named / 13 not.
+
+Retrieval eval, 40 questions (no LLM calls; results/20260930T194204Z)
+  | variant | recall@10 | MRR | passage hit@10 | p50 | p95 |
+  | baseline | 0.588 | 0.577 | 0.650 | 2173 ms | 3375 ms |
+  | no-keyword | 0.613 | 0.582 | 0.700 | 1983 ms | 2496 ms |
+  | no-vector | 0.512 | 0.513 | 0.300 | 281 ms | 1534 ms |
+  | no-rerank | 0.487 | 0.383 | 0.550 | 306 ms | 756 ms |
+  By tag (recall@10 / MRR, baseline): landmark 0.65/0.70 (23) vs not 0.50/0.41 (17); named 0.63/0.58 (27) vs not
+  0.50/0.58 (13); cs 0.64/0.66 (32) vs math 0.38/0.23 (8); quick 0.62/0.58 (30), deep 0.50/0.56 (10).
+  no-vector: non-landmark 0.18/0.18. no-rerank: MRR drops most (0.577 -> 0.383).
+
+Keyword channel investigation (no production change)
+- No-keyword is better on exactly one question (#1 Transformer: baseline 0 -> 1.0); all other rows are identical.
+- Cause: `websearch_to_tsquery` ANDs every question word, including generic ones ('transform' & 'replac' & 'recurr'
+  & 'self-attent'; 'new' & 'upper' & 'bound' ...; 'reduc' & 'memori' & 'cost' & 'decod'), so it returns only 3-17
+  papers that contain all of them: later papers paraphrasing the concept, never the expected original (target in
+  none of the keyword lists for #1, #6, #40). For #1 its 17 hits (recurrent/Transformer hybrids) joined the
+  candidates, the cross-encoder scored them 0.94-0.99, and "Attention Is All You Need" (0.741, present via the anchor
+  channel) fell out of the top 12; without them it ranks 5.
+- Tested fix (eval-only patch `--ablations kw-or`): OR between terms, ranked by ts_rank_cd: recall@10 0.613 (= no
+  keyword), MRR 0.573, but p50 13.6 s / p95 25.0 s (ranking many OR matches over 820k abstracts). Not viable as is.
+- Proposed (not applied; needs your decision): drop generic question words from the keyword query and keep AND on the
+  rest, or cap the keyword channel's contribution to papers that also appear in the vector channel's top 200. Either
+  should be tested with the same eval. Note the effect is 1 question in 40.
+- The larger cause of misses is not keyword search: for #6 (GQA) and #40 (diagonal Ramsey) the expected paper is in
+  the candidates (fused rank 7 and 15) but newer same-topic papers get cross-encoder scores ~0.99 and the citation
+  prior adds only ~0.01-0.05.
+
+Answer eval (results/20260930T200908Z): 6 of 40 completed, then 34 failed: gemini-3.5-flash-lite's free-tier daily
+quota is 500 requests (from the 429: quotaValue 500); earlier eval scripts that day had used most of it (they make
+their own client, so the shared counter saw only 167). Completed runs: quick median 16 s (max 51 s), deep 111 s,
+$0.013 per answer, 1.8% claims removed, all written by flash-lite, no fallbacks.
+- Each failed run spent 3-4 min retrying the daily-quota 429. Fixed: a daily-quota 429 with no fallback left raises
+  `LLMQuotaExhausted` at once. The answer eval now stops after 2 failed runs in a row.
+- Citation sample (55 pairs, all from the 6 runs, checked by hand): 55/55 claims supported by the cited passage, all
+  numbers correct; 2 imprecise attributions (RoPE's mechanism called "the approach described by Li"; one paper's
+  softmax/sigmoid choice stated as general); 2 sentences leaked the status label ("the Su et al. landmark papers")
+  -> WRITE prompt now says the labels are never written into the answer; 5 background statements hedged as a
+  preprint's claim (over-cautious, not wrong).
+
+Preprint status bug
+- QLoRA ("a 2024 preprint by Dettmers"): the data was right (the lookup returns "landmark"); the verifier model wrote
+  the attribution anyway, inventing the year, and the re-check accepted it. Fixes: (1) a rewrite that adds "preprint"
+  wording while none of the cited sources is a preprint is rejected and the original sentence goes to the re-check
+  (kept as supported if it passes); (2) the VERIFY label says "NOT a preprint" for landmark/foundational/peer-reviewed
+  sources; (3) real bug found on the way: source_status ignored is_foundational, so foundational papers without a
+  venue were "preprint" -> now "foundational". Tests added.
+
+Jobs
+- Nightly OAI-PMH harvest disabled: `jobs.oai_harvest_enabled: false` (code kept; cron is a no-op).
+- Weekly Kaggle snapshot job (`ingest/weekly.py`, cron Mondays 00:30 UTC, `make snapshot`): download (skipped when
+  current); stop if the zip is unchanged; else process only records with update_date on or after the newest one of
+  the last ingested snapshot, upsert through the metadata pass, upsert new records into arxiv_catalog, then
+  post-harvest (foundational, embeddings, scores). First run (no previous state): 3,182,867 lines in 26 min, 0
+  inserted / 0 updated (same snapshot as the DB), newest update_date 2026-09-25, foundational 8 (+1), 1,495 scores
+  updated. Second run: "snapshot unchanged" in 10 s.
+- GROBID mem_limit 5g.
+
+README: results tables, tag breakdown, keyword finding, partial answer results, Known limitations section, weekly job.

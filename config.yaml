@@ -72,6 +72,9 @@ llm_client:
 arxiv:
   min_interval_s: 3.1
   user_agent: "arxiv-research-engine/0.1 (mailto:${CONTACT_EMAIL})"
+jobs:
+  oai_harvest_enabled: false         # nightly OAI-PMH harvest (spec 16). Off: arXiv's OAI ListRecords returns HTTP 406.
+                                     # New papers come from the weekly Kaggle snapshot job instead (Mondays 00:30 UTC).
 feeds:                               # weekly digests (spec 16)
   digest_days: 7                     # papers submitted in the last N days
   top_n: 10

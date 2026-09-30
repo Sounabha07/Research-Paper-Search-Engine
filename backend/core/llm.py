@@ -47,6 +47,10 @@ class LLMInvalidResponse(LLMError):
     """Structured call returned JSON that failed validation twice."""
 
 
+class LLMQuotaExhausted(LLMError):
+    """A model's daily quota is used up and there is no fallback for it."""
+
+
 class ModelUnavailableError(ConfigError):
     pass
 
@@ -316,6 +320,11 @@ class LLMClient:
                     )
                     model, overloaded = fallback, 0
                     continue
+                if exhausted:  # no fallback left: retrying cannot succeed before the quota resets (midnight Pacific)
+                    raise LLMQuotaExhausted(
+                        f"{model}: daily request quota used up (free tier: {quota_value(e) or '?'} per day); "
+                        "it resets at midnight Pacific time"
+                    ) from e
                 if _is_retryable(e) and retry < lc.retries:
                     delay = min(lc.backoff_max_s, lc.backoff_base_s * 2**retry) * (0.5 + random.random() / 2)
                     server_delay = _server_retry_delay(e)

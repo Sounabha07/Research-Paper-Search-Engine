@@ -244,3 +244,15 @@ async def test_fallback_answer_is_not_cached_under_requested_model(cfg: AppConfi
     assert not [k for k in redis.data if k.startswith("llmcache:")]  # nothing cached for the main model
     second = await client.generate("p", model=cfg.models.llm_main, purpose="write")
     assert second.text == "main answer" and second.model == cfg.models.llm_main  # asked again, not a stale hit
+
+
+async def test_daily_quota_on_light_model_fails_fast(cfg: AppConfig) -> None:
+    from core.llm import LLMQuotaExhausted
+
+    msg = "Quota exceeded, quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier, 'quotaValue': '500'"
+    quota = genai_errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": msg}})
+    fake = FakeGenai([quota, _resp("never reached")])
+    client, _ = _client(cfg, fake)
+    with pytest.raises(LLMQuotaExhausted, match="500 per day"):
+        await client.generate("p", model=cfg.models.llm_light, purpose="read")
+    assert len(fake.configs) == 1  # no retries: the daily quota does not come back within minutes

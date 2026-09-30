@@ -38,7 +38,8 @@ flowchart LR
     API -- "arq jobs" --> R[(Redis<br/>queues, pub/sub,<br/>LLM cache, rate limits)]
     R --> W[arq worker<br/>embedder + reranker on GPU<br/>answer pipeline, parsing, cron]
     R --> F[fetcher<br/>the only process that talks to arXiv<br/>1 request / 3.1 s]
-    F -- "PDFs, OAI-PMH, ID lookups" --> AX[(arXiv)]
+    F -- "PDFs, ID lookups" --> AX[(arXiv)]
+    KG[(Kaggle arXiv snapshot<br/>weekly)] --> W
     F -- "pdf_tmp/" --> W
     W -- "TEI" --> G[GROBID]
     W <--> PG[(Postgres 17 + pgvector<br/>papers, chunks, citation edges,<br/>threads, runs, collections, feeds)]
@@ -100,13 +101,22 @@ Secrets are read only from environment variables (`.env`, never committed).
 | `make fetch IDS="2106.09685 ..."` | queue specific papers |
 | `make fulltext-report` | fetch/parse timings, chunks, reference resolution rate |
 | `make score` | PageRank and scores from the current citation edges |
-| `make nightly` | run the nightly job now: OAI-PMH harvest (cs, math), foundational papers, embeddings, scores |
+| `make snapshot` | run the weekly job now: latest Kaggle snapshot, new and changed papers only, then foundational papers, embeddings, scores |
+| `make nightly` | nightly OAI-PMH harvest; disabled (`jobs.oai_harvest_enabled: false`), see below |
 | `make eval ARGS="..."` | eval suite (below) |
 | `make eval-verifier` | adversarial verifier test |
 | `make backup` / `make restore FILE=...` | `pg_dump` custom format to `DATA_DIR/backups/` |
 | `make test` / `make lint` | pytest; ruff + mypy |
 
-Scheduled in the worker (UTC): janitor every 30 min, nightly job at 02:00, feed digests Mondays at 03:00.
+Scheduled in the worker (UTC): janitor every 30 min, weekly Kaggle snapshot Mondays at 00:30, feed digests Mondays
+at 03:00.
+
+**New papers.** The weekly job downloads the latest Kaggle arXiv snapshot (skipped when the local copy is current),
+processes only records whose `update_date` is on or after the newest one already ingested, upserts them through the
+same metadata pass as the initial load, and then runs the post-ingest steps (foundational papers, abstract
+embeddings, citation scores, PageRank). The spec's nightly OAI-PMH harvest is implemented but disabled: arXiv's OAI
+endpoint answers `ListRecords` with HTTP 406 (other verbs work), so papers newer than the latest snapshot appear with
+up to a week's delay.
 
 **Gemini free tier.** The key runs on the free tier: gemini-3.5-flash allows 20 requests per day, so WRITE uses
 gemini-3.5-flash-lite by default (`models.write_model`; flash is selectable). A shared per-model rate limiter keeps
@@ -131,23 +141,61 @@ make eval ARGS="--answers"                             # answer pipeline, cached
 
 ### Results
 
-_To be filled in after the full eval run (pending approval of the question list)._
+Eval of 2026-09-30, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
+(no LLM rewrite), so these numbers are retrieval alone.
 
 | variant | recall@10 | MRR | passage hit@10 | latency p50 | latency p95 |
 |---|---|---|---|---|---|
-| baseline | | | | | |
-| no keyword | | | | | |
-| no vector | | | | | |
-| no rerank | | | | | |
+| baseline (keyword + vector + anchors, reranked) | 0.588 | 0.577 | 0.650 | 2.2 s | 3.4 s |
+| no keyword | 0.613 | 0.582 | 0.700 | 2.0 s | 2.5 s |
+| no vector | 0.512 | 0.513 | 0.300 | 0.3 s | 1.5 s |
+| no rerank | 0.487 | 0.383 | 0.550 | 0.3 s | 0.8 s |
 
-| answers | quick p50 / p95 | deep p50 / p95 | cost per answer | removed claims | citation precision (manual sample) |
+Recall@10 / MRR by question tag (baseline): landmark paper expected 0.65 / 0.70 (23 questions) vs not 0.50 / 0.41
+(17); named in the question 0.63 / 0.58 (27) vs described only 0.50 / 0.58 (13); cs 0.64 / 0.66 (32) vs math
+0.38 / 0.23 (8); quick 0.62 / 0.58 (30) vs deep 0.50 / 0.56 (10). Without the vector channel, recall on questions
+without a landmark drops to 0.18; the reranker is the largest single contributor to MRR.
+
+The keyword channel's net effect is one question: its strict all-words query returned later papers that paraphrase
+the question and pushed "Attention Is All You Need" out of the top 10 (details in PROGRESS.md). The more common
+failure is different: the expected paper is among the candidates, but the cross-encoder scores dozens of newer papers
+on the same topic higher than the original (e.g. diagonal Ramsey, grouped-query attention).
+
+| answers | quick p50 / max | deep | cost per answer | removed claims | citation precision (manual, 55 pairs) |
 |---|---|---|---|---|---|
-| 40 | | | | | |
+| 6 of 40 (free-tier daily quota reached) | 16 s / 51 s | 111 s (1 run) | $0.013 | 1.8% | 55/55 supported by the cited passage; 2 imprecise attributions |
+
+The answer run stopped being meaningful after 6 questions: gemini-3.5-flash-lite's free tier allows 500 requests a
+day and the full run needs about 350, on a day when earlier tests had already used most of the quota. The remaining
+34 questions can be run after the daily reset (`make eval ARGS="--answers --ids 7,8,..."`); completed answers come
+from the response cache.
 
 Other measured results (details in PROGRESS.md): the adversarial verifier test catches 11 of 12 altered sentences
 (wrong numbers, wrong paper, merged experiments, unsupported extensions, preprint claims stated as fact) with at most
 1 of 12 originals wrongly removed; the reranker switch to bge-reranker-v2-m3 moved the paper a question is about to
 rank 1 in the A/B set.
+
+## Known limitations
+
+- **Math is not compared exactly.** The verifier checks that a supporting span exists and that rewrites keep their
+  `$...$` math, but it does not compare formulas in a sentence with the source: full-text passages come from PDFs
+  as plain text without LaTeX. A wrong exponent can pass (seen: "|F| > ck^4 m" for a source's (ck^4)^m).
+- **Claims combining two sources can slip through.** Each sentence is checked against the passages it cites, as a
+  whole; a sentence that merges a fact from one source with a detail from another ("65B on a consumer GPU" from
+  "33B on a consumer GPU" and "65B on a 48 GB GPU") is sometimes accepted (missed in every run of the adversarial
+  test).
+- **Preprint detection depends on arXiv metadata.** A paper counts as peer-reviewed only if its journal-ref or
+  comments name a venue; many published papers never update that, so they are treated as preprints and their strong
+  claims get attributed ("a 2023 preprint by ... reports"). Landmark and foundational papers are never treated as
+  preprints. The verifier also sometimes hedges background statements that need no attribution.
+- **Free-tier Gemini.** gemini-3.5-flash allows 20 requests a day and flash-lite 500, so answers are written by
+  flash-lite, a busy day runs out (about 60 quick answers a day), and a model's 503/429 falls back to flash-lite
+  (shown on the answer). The rate limiter keeps requests under the per-minute limits but cannot add daily quota.
+- **Retrieval favors papers that match the question's wording** over the original paper on a topic when many newer
+  papers discuss it; math recall is lower (0.38 recall@10 on 8 questions).
+- **New papers arrive weekly**, from the Kaggle snapshot; arXiv's OAI-PMH `ListRecords` returns HTTP 406, so the
+  nightly harvest is disabled.
+- **Citation counts are within this corpus** (edges come only from papers whose full text was parsed here).
 
 ## Layout
 

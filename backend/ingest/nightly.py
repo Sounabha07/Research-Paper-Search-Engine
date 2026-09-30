@@ -1,7 +1,10 @@
-"""Nightly job (spec 16): OAI-PMH harvest for cs and math, then abstract embeddings, foundational papers,
-citation scores and PageRank from the current edges.
+"""Nightly OAI-PMH harvest (spec 16) and the post-harvest steps shared with the weekly snapshot job.
 
-The harvest itself runs in the fetcher (all arXiv traffic does); it enqueues post_harvest_job when done.
+DISABLED by default (`jobs.oai_harvest_enabled: false`): arXiv's OAI endpoint answers ListRecords with HTTP 406
+(Identify, ListSets and ListMetadataFormats work). New papers come from the weekly Kaggle snapshot job
+(ingest/weekly.py) instead. The code stays for when the endpoint works again.
+
+When enabled, the harvest runs in the fetcher (all arXiv traffic does) and enqueues post_harvest_job when done.
 `python -m ingest.nightly` queues a run now (make nightly).
 """
 
@@ -36,7 +39,11 @@ def harvest_from(last: str | None, today: date | None = None) -> str:
     return (today - timedelta(days=FIRST_RUN_DAYS)).isoformat()
 
 
-async def queue_harvest(redis: Redis) -> str:
+async def queue_harvest(redis: Redis) -> str | None:
+    """Queue the OAI harvest, or return None when it is disabled in config."""
+    if not get_config().jobs.oai_harvest_enabled:
+        log.info("nightly OAI-PMH harvest disabled (jobs.oai_harvest_enabled)")
+        return None
     last = await redis.get(OAI_LAST_HARVEST)
     frm = harvest_from(last.decode() if isinstance(last, bytes) else last)
     # front of the bulk queue: ahead of warm/landmark fetches, still behind urgent ones
@@ -86,7 +93,9 @@ async def main() -> None:
     get_config()
     redis = get_redis()
     try:
-        print(f"queued OAI-PMH harvest of {SETS} from {await queue_harvest(redis)}", flush=True)
+        frm = await queue_harvest(redis)
+        print(f"queued OAI-PMH harvest of {SETS} from {frm}" if frm else
+              "OAI-PMH harvest is disabled (jobs.oai_harvest_enabled); use make snapshot", flush=True)  # fmt: skip
     finally:
         await redis.aclose()
 

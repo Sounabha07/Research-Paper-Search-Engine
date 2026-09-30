@@ -16,7 +16,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -273,22 +273,36 @@ async def verify_sentences(
             r = by_seq.get(f.seq)
             if f.verdict == "partial_rewritten" and (r is None or r.verdict != "supported"):
                 finals[k] = Final(f.seq, f.section, f.text, "unsupported_removed", f.tags, "rewrite not supported")
+            elif f.reason == SPURIOUS_ATTRIBUTION:  # the original sentence itself passed the re-check
+                finals[k] = Final(f.seq, f.section, f.text, "supported", f.tags, span=r.span if r else None,
+                                  span_source=r.span_source if r else None)  # fmt: skip
     finals.sort(key=lambda f: f.seq)
     return finals
 
 
+def is_preprint(status: str) -> bool:
+    return status.startswith("preprint")
+
+
 def _source_label(s: SourceText | None) -> str:
-    return f" (status: {s.status}; first author: {s.authors.split(', ')[0]})" if s and s.status else ""
+    if not s or not s.status:
+        return ""
+    kind = s.status if is_preprint(s.status) else f"{s.status}, NOT a preprint"
+    return f" (status: {kind}; first author: {s.authors.split(', ')[0]})"
 
 
-def source_status(is_landmark: bool, venue_accepted: bool, venue_name: str | None, journal_ref: str | None,
-                  year: int | None) -> str:  # fmt: skip
-    """How settled a source's claims are, for WRITE and VERIFY."""
-    if venue_accepted or journal_ref:
-        reviewed = f"peer-reviewed: {venue_name or journal_ref}"
-        return f"landmark, {reviewed}" if is_landmark else reviewed
-    if is_landmark:
-        return "landmark"
+STATUS_COLUMNS = "is_landmark, is_foundational, venue_accepted, venue_name, journal_ref"
+
+
+def source_status(row: Mapping[str, Any], year: int | None) -> str:
+    """How settled a source's claims are, for WRITE and VERIFY. Landmark and foundational papers are never
+    preprints, with or without a venue in the arXiv metadata. `row` has the STATUS_COLUMNS of `papers`."""
+    known = "landmark" if row["is_landmark"] else "foundational" if row["is_foundational"] else None
+    if row["venue_accepted"] or row["journal_ref"]:
+        reviewed = f"peer-reviewed: {row['venue_name'] or row['journal_ref']}"
+        return f"{known}, {reviewed}" if known else reviewed
+    if known:
+        return known
     return f"preprint ({year})" if year else "preprint"
 
 
@@ -297,12 +311,11 @@ async def source_texts(
 ) -> dict[str, SourceText]:
     """Source id -> text (abstracts prefixed with the title), paper title, status, and author last names."""
     rows = await pool.fetch(
-        "SELECT arxiv_id, is_landmark, venue_accepted, venue_name, journal_ref,"
+        f"SELECT arxiv_id, {STATUS_COLUMNS},"
         " extract(year FROM v1_date)::int AS year, authors FROM papers WHERE arxiv_id = ANY($1)",
         list({p.arxiv_id for p in by_id.values()}),
     )
-    meta = {r["arxiv_id"]: (source_status(r["is_landmark"], r["venue_accepted"], r["venue_name"], r["journal_ref"],
-                                          r["year"]), author_names(r["authors"])) for r in rows}  # fmt: skip
+    meta = {r["arxiv_id"]: (source_status(r, r["year"]), author_names(r["authors"])) for r in rows}  # fmt: skip
     out = {}
     for sid, p in by_id.items():
         title = titles.get(p.arxiv_id, ("", None))[0]
@@ -327,6 +340,11 @@ def _apply_verdict(
         return Final(i, d.section, d.with_tags(), "unsupported_removed", d.tags, v.verdict)
     text = d.with_tags() if v.verdict == "supported" else _rewrite(v.rewrite or "", d)
     verdict = "supported" if v.verdict == "supported" else "partial_rewritten"
+    reason = None
+    if verdict == "partial_rewritten" and spurious_preprint_attribution(v.rewrite or "", d, sources):
+        # the verifier attributed a claim to "a preprint" that is not one (seen: QLoRA, a landmark, rewritten as
+        # "a 2024 preprint by Dettmers"): keep the original sentence and let the re-check judge it as written
+        text, reason = d.with_tags(), SPURIOUS_ATTRIBUTION
     if verdict == "partial_rewritten" and altered_math(strip_tags(text), d.text, sources, d.tags):
         return Final(i, d.section, text, "unsupported_removed", d.tags, "rewrite altered math")
     span_source = find_span(v.span, sources, d.tags)
@@ -338,7 +356,24 @@ def _apply_verdict(
             return Final(
                 i, d.section, text, "unsupported_removed", d.tags, f"names not in source: {', '.join(missing)}"
             )
-    return Final(i, d.section, text, verdict, d.tags, span=v.span if span_source else None, span_source=span_source)
+    return Final(
+        i, d.section, text, verdict, d.tags, reason, span=v.span if span_source else None, span_source=span_source
+    )
+
+
+SPURIOUS_ATTRIBUTION = "spurious preprint attribution dropped"
+_PREPRINT_WORD = re.compile(r"\bpre-?prints?\b", re.I)
+
+
+def spurious_preprint_attribution(rewrite: str, d: DraftSentence, sources: dict[str, SourceText]) -> bool:
+    """The rewrite calls something a preprint although no cited source is one (statuses known)."""
+    statuses = [sources[t].status for t in d.tags if t in sources and sources[t].status]
+    return (
+        bool(statuses)
+        and not any(is_preprint(s) for s in statuses)
+        and bool(_PREPRINT_WORD.search(rewrite))
+        and not _PREPRINT_WORD.search(d.text)
+    )
 
 
 async def step_verify(st: RunState, drafts: list[DraftSentence], sources: dict[str, SourceText]) -> list[Final]:

@@ -1,52 +1,58 @@
 # Eval questions (spec 17). Each expected paper was checked to be in the corpus with an abstract embedding
 # (state ready = full text, or signals_done = abstract level) and its title verified against the id.
 # Papers only known from reference lookups (state 'discovered', no embedding) were left out on purpose.
-# mode: quick | deep (deep fetches full text for the top papers).
+#
+# Fields:
+#   mode      quick | deep (deep fetches full text for the top papers)
+#   landmark  an expected paper is a landmark or foundational paper (the anchor channel always considers those)
+#   named     the question contains the paper's method/model name, a distinctive phrase from its title, or the
+#             named conjecture it resolves; unnamed questions describe the idea only
+#   field     cs | math
 questions:
   # --- architecture and scaling
-  - {id: 1, mode: quick, topic: architecture, question: "How does the Transformer replace recurrence with self-attention?", expected_papers: ["1706.03762"]}
-  - {id: 2, mode: quick, topic: architecture, question: "How are rotary position embeddings computed, and why do they encode relative position?", expected_papers: ["2104.09864"]}
-  - {id: 3, mode: deep, topic: architecture, question: "How do sparse mixture-of-experts layers route tokens to experts?", expected_papers: ["1701.06538", "2101.03961", "2401.04088"]}
-  - {id: 4, mode: quick, topic: scaling, question: "How does language model loss depend on model size, dataset size, and compute?", expected_papers: ["2001.08361", "2203.15556"]}
-  - {id: 5, mode: quick, topic: scaling, question: "How much training data should a compute-optimal language model use relative to its number of parameters?", expected_papers: ["2203.15556"]}
-  - {id: 6, mode: quick, topic: architecture, question: "How does grouped-query attention reduce the memory cost of decoding?", expected_papers: ["2305.13245"]}
-  - {id: 7, mode: quick, topic: architecture, question: "How do selective state space models achieve linear-time sequence modeling?", expected_papers: ["2312.00752"]}
+  - {id: 1, mode: quick, topic: architecture, field: cs, landmark: true, named: true, question: "How does the Transformer replace recurrence with self-attention?", expected_papers: ["1706.03762"]}
+  - {id: 2, mode: quick, topic: architecture, field: cs, landmark: true, named: true, question: "How are rotary position embeddings computed, and why do they encode relative position?", expected_papers: ["2104.09864"]}
+  - {id: 3, mode: deep, topic: architecture, field: cs, landmark: true, named: true, question: "How do sparse mixture-of-experts layers route tokens to experts?", expected_papers: ["1701.06538", "2101.03961", "2401.04088"]}
+  - {id: 4, mode: quick, topic: scaling, field: cs, landmark: true, named: false, question: "How does language model loss depend on model size, dataset size, and compute?", expected_papers: ["2001.08361", "2203.15556"]}
+  - {id: 5, mode: quick, topic: scaling, field: cs, landmark: true, named: true, question: "How much training data should a compute-optimal language model use relative to its number of parameters?", expected_papers: ["2203.15556"]}
+  - {id: 6, mode: quick, topic: architecture, field: cs, landmark: false, named: true, question: "How does grouped-query attention reduce the memory cost of decoding?", expected_papers: ["2305.13245"]}
+  - {id: 7, mode: quick, topic: architecture, field: cs, landmark: true, named: true, question: "How do selective state space models achieve linear-time sequence modeling?", expected_papers: ["2312.00752"]}
   # --- efficient training and inference
-  - {id: 8, mode: quick, topic: inference, question: "How does speculative decoding speed up autoregressive generation without changing the output distribution?", expected_papers: ["2211.17192", "2302.01318"]}
-  - {id: 9, mode: deep, topic: inference, question: "How can draft tokens be generated without a separate draft model, as in Medusa or EAGLE?", expected_papers: ["2401.10774", "2401.15077"]}
-  - {id: 10, mode: quick, topic: inference, question: "How does FlashAttention reduce memory reads and writes in exact attention?", expected_papers: ["2205.14135", "2307.08691"]}
-  - {id: 11, mode: quick, topic: inference, question: "How does PagedAttention manage the key-value cache when serving large language models?", expected_papers: ["2309.06180"]}
-  - {id: 12, mode: quick, topic: inference, question: "How can a language model process very long streams using attention sinks?", expected_papers: ["2309.17453"]}
-  - {id: 13, mode: deep, topic: quantization, question: "Which post-training quantization methods compress large language model weights to 3 or 4 bits?", expected_papers: ["2210.17323", "2306.00978"]}
-  - {id: 14, mode: quick, topic: quantization, question: "How does LLM.int8() handle outlier features in 8-bit matrix multiplication?", expected_papers: ["2208.07339"]}
-  - {id: 15, mode: deep, topic: fine-tuning, question: "How does QLoRA fine-tune quantized models, and how does it build on LoRA?", expected_papers: ["2305.14314", "2106.09685"]}
-  - {id: 16, mode: quick, topic: training, question: "How does ZeRO partition optimizer states, gradients, and parameters across data-parallel workers?", expected_papers: ["1910.02054"]}
+  - {id: 8, mode: quick, topic: inference, field: cs, landmark: true, named: true, question: "How does speculative decoding speed up autoregressive generation without changing the output distribution?", expected_papers: ["2211.17192", "2302.01318"]}
+  - {id: 9, mode: deep, topic: inference, field: cs, landmark: false, named: true, question: "How can draft tokens be generated without a separate draft model, as in Medusa or EAGLE?", expected_papers: ["2401.10774", "2401.15077"]}
+  - {id: 10, mode: quick, topic: inference, field: cs, landmark: true, named: true, question: "How does FlashAttention reduce memory reads and writes in exact attention?", expected_papers: ["2205.14135", "2307.08691"]}
+  - {id: 11, mode: quick, topic: algorithms, field: cs, landmark: false, named: false, question: "Can single-source shortest paths be computed in near-linear time when some edge weights are negative?", expected_papers: ["2203.03456"]}
+  - {id: 12, mode: quick, topic: inference, field: cs, landmark: false, named: true, question: "How can a language model process very long streams using attention sinks?", expected_papers: ["2309.17453"]}
+  - {id: 13, mode: deep, topic: quantization, field: cs, landmark: true, named: false, question: "Which post-training quantization methods compress large language model weights to 3 or 4 bits?", expected_papers: ["2210.17323", "2306.00978"]}
+  - {id: 14, mode: quick, topic: math, field: math, landmark: false, named: false, question: "In a finite family of sets that is closed under taking unions, must some element belong to a constant fraction of the sets, and what constant has been proved?", expected_papers: ["2211.09055"]}
+  - {id: 15, mode: deep, topic: fine-tuning, field: cs, landmark: true, named: true, question: "How does QLoRA fine-tune quantized models, and how does it build on LoRA?", expected_papers: ["2305.14314", "2106.09685"]}
+  - {id: 16, mode: quick, topic: algorithms, field: cs, landmark: false, named: false, question: "Is the classic priority-queue-based shortest path algorithm optimal on every graph instance, not only in the worst case?", expected_papers: ["2311.11793"]}
   # --- alignment and reasoning
-  - {id: 17, mode: quick, topic: alignment, question: "How is reinforcement learning from human feedback used to train language models to follow instructions?", expected_papers: ["2203.02155"]}
-  - {id: 18, mode: quick, topic: alignment, question: "How does Direct Preference Optimization avoid training an explicit reward model?", expected_papers: ["2305.18290"]}
-  - {id: 19, mode: quick, topic: alignment, question: "How can AI feedback replace human labels when training a harmless assistant?", expected_papers: ["2212.08073"]}
-  - {id: 20, mode: quick, topic: reasoning, question: "How does chain-of-thought prompting improve reasoning, and how does self-consistency extend it?", expected_papers: ["2201.11903", "2203.11171"]}
-  - {id: 21, mode: quick, topic: reasoning, question: "How does process supervision compare with outcome supervision for reward models on math reasoning?", expected_papers: ["2305.20050"]}
-  - {id: 22, mode: deep, topic: reasoning, question: "How is reinforcement learning with group relative policy optimization used to train reasoning in open language models?", expected_papers: ["2402.03300", "2501.12948"]}
-  - {id: 23, mode: deep, topic: agents, question: "How do language models interleave reasoning with tool calls or actions?", expected_papers: ["2210.03629", "2302.04761"]}
-  - {id: 24, mode: quick, topic: reasoning, question: "Is it more effective to scale test-time compute or model parameters for LLM reasoning?", expected_papers: ["2408.03314"]}
+  - {id: 17, mode: quick, topic: alignment, field: cs, landmark: true, named: true, question: "How is reinforcement learning from human feedback used to train language models to follow instructions?", expected_papers: ["2203.02155"]}
+  - {id: 18, mode: quick, topic: math, field: math, landmark: false, named: false, question: "What is the largest area of a shape that can be moved around a right-angled corner in a hallway of unit width?", expected_papers: ["2411.19826"]}
+  - {id: 19, mode: quick, topic: alignment, field: cs, landmark: true, named: true, question: "How can AI feedback replace human labels when training a harmless assistant?", expected_papers: ["2212.08073"]}
+  - {id: 20, mode: quick, topic: reasoning, field: cs, landmark: true, named: true, question: "How does chain-of-thought prompting improve reasoning, and how does self-consistency extend it?", expected_papers: ["2201.11903", "2203.11171"]}
+  - {id: 21, mode: quick, topic: reasoning, field: cs, landmark: false, named: false, question: "How does process supervision compare with outcome supervision for reward models on math reasoning?", expected_papers: ["2305.20050"]}
+  - {id: 22, mode: deep, topic: reasoning, field: cs, landmark: true, named: true, question: "How is reinforcement learning with group relative policy optimization used to train reasoning in open language models?", expected_papers: ["2402.03300", "2501.12948"]}
+  - {id: 23, mode: deep, topic: agents, field: cs, landmark: true, named: false, question: "How do language models interleave reasoning with tool calls or actions?", expected_papers: ["2210.03629", "2302.04761"]}
+  - {id: 24, mode: quick, topic: reasoning, field: cs, landmark: false, named: true, question: "Is it more effective to scale test-time compute or model parameters for LLM reasoning?", expected_papers: ["2408.03314"]}
   # --- retrieval
-  - {id: 25, mode: quick, topic: retrieval, question: "How does retrieval-augmented generation combine a dense retriever with a sequence-to-sequence generator?", expected_papers: ["2005.11401"]}
-  - {id: 26, mode: quick, topic: retrieval, question: "How do dense passage retrievers compare with BM25 for open-domain question answering?", expected_papers: ["2004.04906"]}
-  - {id: 27, mode: quick, topic: retrieval, question: "How can a language model retrieve from a database of trillions of tokens during training and inference?", expected_papers: ["2112.04426"]}
-  - {id: 28, mode: quick, topic: retrieval, question: "How can a model decide when to retrieve and critique its own generations?", expected_papers: ["2310.11511"]}
+  - {id: 25, mode: quick, topic: retrieval, field: cs, landmark: true, named: true, question: "How does retrieval-augmented generation combine a dense retriever with a sequence-to-sequence generator?", expected_papers: ["2005.11401"]}
+  - {id: 26, mode: quick, topic: algorithms, field: cs, landmark: false, named: false, question: "Can the minimum cut of a weighted graph be found deterministically in near-linear time?", expected_papers: ["2401.05627"]}
+  - {id: 27, mode: quick, topic: retrieval, field: cs, landmark: false, named: true, question: "How can a language model retrieve from a database of trillions of tokens during training and inference?", expected_papers: ["2112.04426"]}
+  - {id: 28, mode: quick, topic: retrieval, field: cs, landmark: false, named: true, question: "How can a model decide when to retrieve and critique its own generations?", expected_papers: ["2310.11511"]}
   # --- vision and generative models
-  - {id: 29, mode: quick, topic: vision, question: "How do vision transformers process an image as a sequence of patches?", expected_papers: ["2010.11929"]}
-  - {id: 30, mode: quick, topic: vision, question: "How can visual representations be learned from natural language supervision on image-text pairs?", expected_papers: ["2103.00020"]}
-  - {id: 31, mode: deep, topic: generative, question: "How do denoising diffusion models generate images, and how does running diffusion in a latent space make it cheaper?", expected_papers: ["2006.11239", "2112.10752"]}
-  - {id: 32, mode: quick, topic: generative, question: "What is classifier-free guidance in diffusion models?", expected_papers: ["2207.12598"]}
-  - {id: 33, mode: quick, topic: generative, question: "How does flow matching train continuous normalizing flows without simulation?", expected_papers: ["2210.02747", "2209.03003"]}
-  - {id: 34, mode: quick, topic: vision, question: "How does a promptable foundation model for image segmentation work?", expected_papers: ["2304.02643"]}
+  - {id: 29, mode: quick, topic: math, field: math, landmark: false, named: false, question: "How densely can equal balls be packed in high-dimensional Euclidean space, and what is the best recent lower bound on the density?", expected_papers: ["2312.10026"]}
+  - {id: 30, mode: quick, topic: vision, field: cs, landmark: true, named: true, question: "How can visual representations be learned from natural language supervision on image-text pairs?", expected_papers: ["2103.00020"]}
+  - {id: 31, mode: deep, topic: generative, field: cs, landmark: true, named: true, question: "How do denoising diffusion models generate images, and how does running diffusion in a latent space make it cheaper?", expected_papers: ["2006.11239", "2112.10752"]}
+  - {id: 32, mode: quick, topic: generative, field: cs, landmark: false, named: true, question: "What is classifier-free guidance in diffusion models?", expected_papers: ["2207.12598"]}
+  - {id: 33, mode: quick, topic: generative, field: cs, landmark: false, named: true, question: "How does flow matching train continuous normalizing flows without simulation?", expected_papers: ["2210.02747", "2209.03003"]}
+  - {id: 34, mode: quick, topic: vision, field: cs, landmark: true, named: false, question: "How does a promptable foundation model for image segmentation work?", expected_papers: ["2304.02643"]}
   # --- graphs, robustness, privacy
-  - {id: 35, mode: quick, topic: graphs, question: "How do graph attention networks differ from graph convolutional networks?", expected_papers: ["1710.10903", "1609.02907"]}
-  - {id: 36, mode: quick, topic: robustness, question: "How does adversarial training with projected gradient descent make neural networks robust?", expected_papers: ["1706.06083", "1412.6572"]}
-  - {id: 37, mode: deep, topic: privacy, question: "How are models trained on decentralized data with federated averaging, and how can deep learning training be made differentially private?", expected_papers: ["1602.05629", "1607.00133"]}
+  - {id: 35, mode: quick, topic: math, field: math, landmark: false, named: false, question: "Take a graph and a second copy of it, with each vertex joined to its copy; after deleting edges at random, is a vertex always at least as likely to stay connected to another vertex on its own level as to that vertex's copy?", expected_papers: ["2410.02545"]}
+  - {id: 36, mode: quick, topic: math, field: math, landmark: false, named: false, question: "Must a set in three-dimensional space that contains a unit line segment in every direction have full Hausdorff dimension?", expected_papers: ["2502.17655"]}
+  - {id: 37, mode: deep, topic: privacy, field: cs, landmark: true, named: true, question: "How are models trained on decentralized data with federated averaging, and how can deep learning training be made differentially private?", expected_papers: ["1602.05629", "1607.00133"]}
   # --- mathematics
-  - {id: 38, mode: deep, topic: math, question: "How was the sensitivity conjecture proved?", expected_papers: ["1907.00847"]}
-  - {id: 39, mode: deep, topic: math, question: "What was proved about the Kahn-Kalai conjecture and about Marton's conjecture?", expected_papers: ["2203.17207", "2311.05762"]}
-  - {id: 40, mode: quick, topic: math, question: "What are the new upper bounds for diagonal Ramsey numbers?", expected_papers: ["2303.09521"]}
+  - {id: 38, mode: deep, topic: math, field: math, landmark: true, named: true, question: "How was the sensitivity conjecture proved?", expected_papers: ["1907.00847"]}
+  - {id: 39, mode: deep, topic: math, field: math, landmark: true, named: true, question: "What was proved about the Kahn-Kalai conjecture and about Marton's conjecture?", expected_papers: ["2203.17207", "2311.05762"]}
+  - {id: 40, mode: quick, topic: math, field: math, landmark: true, named: true, question: "What are the new upper bounds for diagonal Ramsey numbers?", expected_papers: ["2303.09521"]}

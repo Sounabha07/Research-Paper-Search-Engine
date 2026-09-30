@@ -48,3 +48,25 @@ def test_server_date_from_identify() -> None:
         "<Identify><granularity>YYYY-MM-DD</granularity></Identify></OAI-PMH>"
     )
     assert server_date(xml) == "2026-09-17"
+
+
+def test_metadata_run_since_skips_older_records(cfg: AppConfig, tmp_path: Path) -> None:
+    import asyncio
+    import json
+    import zipfile
+
+    from ingest import kaggle
+    from ingest.metadata import run
+
+    recs = [
+        {"id": "2609.00001", "title": "New", "abstract": "a", "categories": "cs.LG", "update_date": "2026-09-28",
+         "versions": [{"created": "Mon, 28 Sep 2026 00:00:00 GMT"}], "authors_parsed": [["A", "B", ""]]},
+        {"id": "2609.00002", "title": "Old", "abstract": "b", "categories": "cs.LG", "update_date": "2026-09-01",
+         "versions": [{"created": "Tue, 01 Sep 2026 00:00:00 GMT"}], "authors_parsed": [["C", "D", ""]]},
+    ]  # fmt: skip
+    zpath = tmp_path / kaggle.ZIP_NAME
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr(kaggle.MEMBER, "\n".join(json.dumps(r) for r in recs))
+    counts = asyncio.run(run(zpath, cfg, dry_run=True, since="2026-09-20"))
+    assert counts.skipped_unchanged == 1 and counts.tier1 == 1  # only the record updated since the last snapshot
+    assert counts.max_update_date == "2026-09-28"

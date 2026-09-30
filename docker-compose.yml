@@ -86,7 +86,7 @@ services:
     # seen in practice + headroom) makes a spike kill only GROBID, which restarts, instead of the whole VM.
     environment:
       JAVA_OPTS: "-Xmx2560m"
-    mem_limit: 4.5g
+    mem_limit: 5g
     ports:
       - "127.0.0.1:8070:8070"
     restart: unless-stopped
