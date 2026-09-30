@@ -13,6 +13,7 @@ Every stage is timed; timings are returned with the result.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
@@ -76,6 +77,7 @@ class Filters:
     year_from: int | None = None
     year_to: int | None = None
     categories: tuple[str, ...] = ()  # exact ("cs.LG") or archive ("math") matches any category
+    restrict_ids: tuple[str, ...] = ()  # "Ask about this paper": only these papers (spec 12b)
 
     def sql(self, first_param: int) -> tuple[str, list[Any]]:
         """SQL condition on table alias `p` and its parameters, numbered from `first_param`."""
@@ -96,6 +98,10 @@ class Filters:
                 f" OR split_part(c, '.', 1) = ANY(${n}::text[]))"
             )
             params.append(list(self.categories))
+            n += 1
+        if self.restrict_ids:
+            clauses.append(f"p.arxiv_id = ANY(${n}::text[])")
+            params.append(list(self.restrict_ids))
         return " AND ".join(clauses), params
 
 
@@ -114,6 +120,8 @@ class PaperHit:
     rerank_score: float = 0.0
     final_score: float = 0.0
     via_anchor: bool = False  # joined the rerank candidates through the anchor channel only
+    name_match: bool = False  # got the name-match boost
+    via_chain: str | None = None  # deep mode: added from the references of this selected paper
 
 
 @dataclass
@@ -175,16 +183,46 @@ def merge_query_lists(fused_per_query: Sequence[Sequence[tuple[Any, float]]]) ->
 
 
 def apply_prior(
-    hits: list[PaperHit], prior_boost_max: float, min_score: float | None, boosts: dict[str, float] | None = None
+    hits: list[PaperHit],
+    prior_boost_max: float,
+    min_score: float | None,
+    boosts: dict[str, float] | None = None,
+    min_kept: int = 0,
 ) -> list[PaperHit]:
-    """Spec 11.3: drop below rerank_min_score, add the capped prior (and any thread-carryover boost),
-    sort by final score."""
-    kept = [h for h in hits if min_score is None or h.rerank_score >= min_score]
-    for h in kept:
+    """Spec 11.3: add the capped prior (and thread-carryover / name-match boosts), sort by final score, and drop
+    papers below rerank_min_score while always keeping the top `min_kept`."""
+    for h in hits:
         h.final_score = (
             h.rerank_score + prior_boost_max * min(max(h.prior, 0.0), 1.0) + (boosts or {}).get(h.arxiv_id, 0.0)
         )
-    return sorted(kept, key=lambda h: -h.final_score)
+    ranked = sorted(hits, key=lambda h: -h.final_score)
+    return [h for i, h in enumerate(ranked) if i < min_kept or min_score is None or h.rerank_score >= min_score]
+
+
+_NAME_PREFIX = re.compile(r"^\s*([^:]{2,60}?)\s*:")
+
+
+def title_name(title: str) -> str | None:
+    """The name part of a title before its colon ("QLoRA" in "QLoRA: Efficient Finetuning of Quantized LLMs")."""
+    m = _NAME_PREFIX.match(title)
+    return m.group(1).strip() if m else None
+
+
+def name_matches(title: str, texts: Sequence[str]) -> bool:
+    """Case-insensitive whole-term match of the title's name part in the question or queries."""
+    name = title_name(title)
+    if not name:
+        return False
+    pattern = re.compile(r"(?<![\w-])" + re.escape(name.lower()) + r"(?![\w-])")
+    return any(pattern.search(t.lower()) for t in texts)
+
+
+def keep_pinned(hits: list[PaperHit], selected: list[PaperHit], pinned: Sequence[str], limit: int) -> list[PaperHit]:
+    """Spec 12b: pinned papers are always selected (even below the score floor); search fills the rest."""
+    pins = set(pinned)
+    pinned_hits = [h for h in hits if h.arxiv_id in pins]
+    others = [h for h in selected if h.arxiv_id not in pins]
+    return sorted(pinned_hits + others[: max(0, limit - len(pinned_hits))], key=lambda h: -h.final_score)
 
 
 def cap_per_paper(passages: list[Passage], max_per_paper: int, limit: int) -> list[Passage]:
@@ -289,6 +327,7 @@ async def select_papers(
     counts: dict[str, int],
     carryover: Sequence[str] = (),
     carryover_boost: float = 0.0,
+    pinned: Sequence[str] = (),
 ) -> list[PaperHit]:
     r = cfg.retrieval
     await _set_vector_params(conn, cfg)
@@ -319,7 +358,7 @@ async def select_papers(
                 anchor_only.add(a)
     # Spec 12b: papers cited earlier in the thread compete too, with a boost after reranking.
     present = {a for a, _ in candidates}
-    for a in carryover:
+    for a in [*carryover, *pinned]:
         if a not in present:
             candidates.append((a, 0.0))
             present.add(a)
@@ -349,9 +388,15 @@ async def select_papers(
     for h, s in zip(hits, scores, strict=True):
         h.rerank_score = s
         h.via_anchor = h.arxiv_id in anchor_only
-    selected = apply_prior(hits, r.prior_boost_max, r.rerank_min_score, {a: carryover_boost for a in carryover})
+    boosts = {a: carryover_boost for a in carryover}
+    for h in hits:
+        if r.name_match_boost and name_matches(h.title, [question, *queries]):
+            h.name_match = True
+            boosts[h.arxiv_id] = boosts.get(h.arxiv_id, 0.0) + r.name_match_boost
+    counts["papers.name_matched"] = sum(h.name_match for h in hits)
+    selected = apply_prior(hits, r.prior_boost_max, r.rerank_min_score, boosts, r.min_papers_kept)
     counts["papers.above_min_score"] = len(selected)
-    return selected[:limit]
+    return keep_pinned(hits, selected, pinned, limit)
 
 
 async def select_passages(
@@ -434,6 +479,7 @@ async def search(
     carryover: Sequence[str] = (),
     carryover_boost: float = 0.0,
     reuse_chunks: Sequence[int] = (),
+    pinned: Sequence[str] = (),
 ) -> SearchResult:
     """Full section-11 retrieval. `queries` defaults to the question itself (no LLM rewrite)."""
     filters = filters or Filters()
@@ -447,7 +493,7 @@ async def search(
         by_query = dict(zip(passage_queries, vectors, strict=True))
         papers = await select_papers(
             conn, models, cfg, question, queries, np.stack([by_query[q] for q in queries]), filters,
-            limit or cfg.agent.papers_for_answer, timings, counts, carryover, carryover_boost,
+            limit or cfg.agent.papers_for_answer, timings, counts, carryover, carryover_boost, pinned,
         )  # fmt: skip
         passages = (
             await select_passages(
@@ -465,6 +511,29 @@ def _json(value: Any) -> Any:
     return orjson.loads(value) if isinstance(value, str | bytes) else value
 
 
+async def search_passages(
+    conn: asyncpg.Connection,
+    models: SearchModels,
+    cfg: AppConfig,
+    question: str,
+    queries: list[str],
+    papers: list[PaperHit],
+    reuse_chunks: Sequence[int] = (),
+) -> tuple[list[Passage], dict[str, float], dict[str, int]]:
+    """Spec 11 steps 5-7 on their own: deep mode runs FETCH and CHAIN between paper and passage selection."""
+    passage_queries = list(dict.fromkeys([question, *queries]))
+    timings = Timings()
+    counts: dict[str, int] = defaultdict(int)
+    with timings.stage("total"):
+        with timings.stage("embed_queries"):
+            vectors = await models.embed_queries(passage_queries)
+        await _set_vector_params(conn, cfg)
+        passages = await select_passages(
+            conn, models, cfg, question, passage_queries, vectors, papers, timings, counts, reuse_chunks
+        )
+    return passages, timings.rounded(), dict(counts)
+
+
 def author_names(authors: list[dict[str, str]]) -> list[str]:
     return [" ".join(x for x in (a.get("first", ""), a.get("last", "")) if x) for a in authors]
 
@@ -478,7 +547,7 @@ def result_to_api(result: SearchResult) -> dict[str, Any]:
                 "arxiv_id": p.arxiv_id, "title": p.title, "year": p.year, "authors": author_names(p.authors),
                 "primary_category": p.primary_category, "badges": p.badges, "full_text": p.state == "ready",
                 "rerank_score": round(p.rerank_score, 4), "prior": round(p.prior, 4),
-                "final_score": round(p.final_score, 4), "via_anchor": p.via_anchor,
+                "final_score": round(p.final_score, 4), "via_anchor": p.via_anchor, "name_match": p.name_match,
             }
             for p in result.papers
         ],

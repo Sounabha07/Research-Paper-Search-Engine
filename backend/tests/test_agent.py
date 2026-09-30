@@ -10,6 +10,7 @@ from agent import prompts
 from agent.bibtex import bibtex
 from agent.run import RunState, clean_summary, step_read, step_verify
 from agent.text import DraftSentence, number_citations, parse_answer, render_with_numbers, strip_tags
+from agent.verify import SourceText, find_span, missing_names, names_in
 from core.config import AppConfig
 from retrieval.search import Passage
 
@@ -98,35 +99,65 @@ def _state(cfg: AppConfig, llm: FakeLLM) -> RunState:
     return st
 
 
-async def test_verify_applies_verdicts(cfg: AppConfig) -> None:
+SOURCES = {
+    "c:1": SourceText("Paper One", "Alpha method reaches 90% accuracy on the benchmark with little compute."),
+    "c:2": SourceText("QLoRA: Efficient Finetuning", "QLoRA fine-tunes a 65B model on a single 48GB GPU."),
+}
+
+
+async def test_verify_applies_verdicts_and_spans(cfg: AppConfig) -> None:
     drafts = [
-        DraftSentence("S", "A is true.", ["c:1"]),
-        DraftSentence("S", "B is huge.", ["c:2"]),
-        DraftSentence("S", "C is false.", ["c:1"]),
+        DraftSentence("S", "Alpha reaches 90% accuracy.", ["c:1"]),
+        DraftSentence("S", "QLoRA fits a 65B model on a small GPU.", ["c:2"]),
+        DraftSentence("S", "Alpha is the best method ever.", ["c:1"]),
         DraftSentence("S", "No tag here."),
         DraftSentence("S", "Bad tag.", [], ["c:999"]),
         DraftSentence("S", "D.", ["c:2"]),
+        DraftSentence("S", "Alpha reaches high accuracy.", ["c:1"]),
+        DraftSentence("S", "TLinFormer fine-tunes a 65B model on one GPU.", ["c:2"]),
     ]
     verdicts = prompts.VerifyOut(results=[
-        prompts.Verdict(index=0, verdict="supported"),
-        prompts.Verdict(index=1, verdict="partial", rewrite="B is large. [[c:2]][[c:999]]"),
+        prompts.Verdict(index=0, verdict="supported", span="Alpha method   reaches 90% accuracy"),  # whitespace ok
+        prompts.Verdict(index=1, verdict="partial", span="fine-tunes a 65B model on a single 48GB GPU",
+                        rewrite="QLoRA fits a 65B model on a single 48GB GPU. [[c:2]][[c:999]]"),
         prompts.Verdict(index=2, verdict="unsupported"),
         # index 3 (sentence "D.") has no verdict -> removed
+        prompts.Verdict(index=4, verdict="supported", span="Alpha is the best method"),  # not in the source
+        prompts.Verdict(index=5, verdict="supported", span="QLoRA fine-tunes a 65B model"),  # names not in source
     ])  # fmt: skip
     llm = FakeLLM({"verify": verdicts})
-    st = _state(cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"verify_batch_size": 5})}), llm)
-    finals = await step_verify(st, drafts, {"c:1": "source one", "c:2": "source two"})
-    got = [(f.seq, f.verdict, f.text) for f in finals]
+    st = _state(cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"verify_batch_size": 10})}), llm)
+    finals = await step_verify(st, drafts, SOURCES)
+    got = [(f.seq, f.verdict, f.text, f.reason) for f in finals]
     assert got == [
-        (0, "supported", "A is true. [[c:1]]"),
-        (1, "partial_rewritten", "B is large. [[c:2]]"),  # rewrite keeps only the original tags
-        (2, "unsupported_removed", "C is false. [[c:1]]"),
-        (3, "unsupported_removed", "No tag here."),
-        (4, "unsupported_removed", "Bad tag."),
-        (5, "unsupported_removed", "D. [[c:2]]"),
-    ]
+        (0, "supported", "Alpha reaches 90% accuracy. [[c:1]]", None),
+        (1, "partial_rewritten", "QLoRA fits a 65B model on a single 48GB GPU. [[c:2]]", None),  # keeps original tags
+        (2, "unsupported_removed", "Alpha is the best method ever. [[c:1]]", "unsupported"),
+        (3, "unsupported_removed", "No tag here.", "no source tag"),
+        (4, "unsupported_removed", "Bad tag.", "invalid source tag"),
+        (5, "unsupported_removed", "D. [[c:2]]", "no verdict"),
+        (6, "unsupported_removed", "Alpha reaches high accuracy. [[c:1]]", "no valid span"),
+        (7, "unsupported_removed", "TLinFormer fine-tunes a 65B model on one GPU. [[c:2]]",
+         "names not in source: TLinFormer"),
+    ]  # fmt: skip
+    assert finals[0].span_source == "c:1" and finals[1].span_source == "c:2"
     assert len(llm.calls) == 1  # untagged sentences are not sent to the verifier
-    assert "source two" in llm.calls[0][1]
+    assert "single 48GB GPU" in llm.calls[0][1]
+
+
+def test_span_and_name_checks() -> None:
+    assert find_span("Alpha method reaches 90% accuracy.", SOURCES, ["c:1"]) == "c:1"
+    assert find_span("reaches 90%", SOURCES, ["c:1"]) is None  # too short to mean anything
+    assert find_span("Alpha method reaches 90% accuracy", SOURCES, ["c:2"]) is None  # not the cited source
+    assert find_span("“Alpha method reaches 90% accuracy”"[1:-1], SOURCES, ["c:1"]) == "c:1"
+    assert names_in("LoRA and QLoRA beat GPT-2 and BERT-large on the Transformer") == [
+        "LoRA",
+        "QLoRA",
+        "GPT-2",
+        "BERT-large",
+    ]
+    assert missing_names("QLoRA uses a 48GB GPU", SOURCES, ["c:2"]) == []  # "GPU" next to digits still matches
+    assert missing_names("LoRA uses a 48GB GPU", SOURCES, ["c:2"]) == ["LoRA"]  # QLoRA is not LoRA
 
 
 async def test_read_drops_notes_with_unknown_sources(cfg: AppConfig) -> None:
@@ -141,7 +172,9 @@ async def test_read_drops_notes_with_unknown_sources(cfg: AppConfig) -> None:
     ]
     out = await step_read(st, "q", passages, {"2106.09685": ("LoRA", 2021)})
     assert [(n.claim, n.source_id) for n in out] == [("x", "c:1"), ("z", "a:2106.09685")]
-    assert st.steps[-1] == ("read", {"notes": 2, "dropped_invalid_source": 1})  # type: ignore[attr-defined]
+    kind, payload = st.steps[-1]  # type: ignore[attr-defined]
+    assert kind == "read" and payload["notes"] == 2 and payload["dropped_invalid_source"] == 1
+    assert payload["items"] == [{"claim": "x", "source_id": "c:1"}, {"claim": "z", "source_id": "a:2106.09685"}]
 
 
 @pytest.mark.parametrize("n", [3])

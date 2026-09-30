@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { ModeToggle } from "@/components/mode-toggle";
+
 type RecentThread = { id: string; title: string; turns: number; last_status: string | null; updated_at: string };
 
 export function AskBox() {
   const router = useRouter();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [question, setQuestion] = useState("");
+  const [mode, setMode] = useState<"quick" | "deep">("quick");
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [categories, setCategories] = useState("");
@@ -44,7 +47,7 @@ export function AskBox() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: question.trim(),
-          mode: "quick",
+          mode,
           filters: {
             year_from: yearFrom ? Number(yearFrom) : null,
             year_to: yearTo ? Number(yearTo) : null,
@@ -76,12 +79,7 @@ export function AskBox() {
           className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
         />
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <div className="flex overflow-hidden rounded-md border border-border text-xs">
-            <span className="bg-primary px-2.5 py-1 text-primary-foreground">Quick</span>
-            <span className="px-2.5 py-1 text-muted-foreground" title="Deep mode arrives in milestone 6">
-              Deep
-            </span>
-          </div>
+          <ModeToggle mode={mode} onChange={setMode} />
           <input value={yearFrom} onChange={(e) => setYearFrom(e.target.value)} placeholder="from year" inputMode="numeric"
             className="w-24 rounded-md border border-border bg-background px-2 py-1" />
           <input value={yearTo} onChange={(e) => setYearTo(e.target.value)} placeholder="to year" inputMode="numeric"

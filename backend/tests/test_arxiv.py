@@ -188,3 +188,16 @@ async def test_grobid_form_and_busy_retry() -> None:
     )
     with pytest.raises(GrobidError):
         await bad.process_fulltext(b"%PDF", "x.pdf")
+
+
+async def test_query_ids_gives_up_after_two_attempts(cfg: AppConfig) -> None:
+    calls = 0
+
+    def handle(req: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429)
+
+    with pytest.raises(FetchError):
+        await _client(cfg, httpx.MockTransport(handle), Clock()).query_ids(["2106.09685"])
+    assert calls == 2  # metadata lookups are re-queued by the fetcher instead of blocking it

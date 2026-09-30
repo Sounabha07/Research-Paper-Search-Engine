@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import sys
 import time
 import uuid
@@ -33,6 +34,8 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 CACHE_PREFIX = "llmcache:"
+DEFAULT_THINKING_LEVEL = "low"  # spec 6.7
+_RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
 
 class LLMError(RuntimeError):
@@ -101,6 +104,26 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, httpx.TransportError | asyncio.TimeoutError)
 
 
+def _server_retry_delay(exc: BaseException) -> float | None:
+    """The retry delay a 429/503 response asks for (google.rpc.RetryInfo "retryDelay": "7s"), if any."""
+    details = getattr(exc, "details", None)
+    items = details.get("error", {}).get("details", []) if isinstance(details, dict) else []
+    for item in items if isinstance(items, list) else []:
+        m = _RETRY_DELAY.match(str(item.get("retryDelay", ""))) if isinstance(item, dict) else None
+        if m:
+            return float(m.group(1))
+    return None
+
+
+def _is_overloaded(exc: BaseException) -> bool:
+    return isinstance(exc, genai_errors.APIError) and exc.code == 503
+
+
+def _is_daily_quota(exc: BaseException) -> bool:
+    """429 because a per-day quota is used up (retrying within the day cannot succeed)."""
+    return isinstance(exc, genai_errors.APIError) and exc.code == 429 and "PerDay" in str(exc)
+
+
 def _is_thinking_rejection(exc: BaseException) -> bool:
     return isinstance(exc, genai_errors.ClientError) and exc.code == 400 and "thinking" in str(exc).lower()
 
@@ -157,6 +180,7 @@ class LLMClient:
         run_id: uuid.UUID | None = None,
         temperature: float = 0.2,
         max_output_tokens: int = 2048,
+        thinking_level: str | None = DEFAULT_THINKING_LEVEL,
     ) -> LLMResult[T]: ...
 
     @overload
@@ -170,6 +194,7 @@ class LLMClient:
         run_id: uuid.UUID | None = None,
         temperature: float = 0.2,
         max_output_tokens: int = 2048,
+        thinking_level: str | None = DEFAULT_THINKING_LEVEL,
     ) -> LLMResult[Any]: ...
 
     async def generate(
@@ -182,8 +207,11 @@ class LLMClient:
         run_id: uuid.UUID | None = None,
         temperature: float = 0.2,
         max_output_tokens: int = 2048,
+        thinking_level: str | None = DEFAULT_THINKING_LEVEL,
     ) -> LLMResult[Any]:
-        params: dict[str, Any] = {"temperature": temperature, "max_output_tokens": max_output_tokens}
+        params: dict[str, Any] = {
+            "temperature": temperature, "max_output_tokens": max_output_tokens, "thinking_level": thinking_level,
+        }  # fmt: skip
         if schema is not None:
             params["schema"] = schema.model_json_schema()
         key = self._cache_key(model, prompt, params)
@@ -197,7 +225,7 @@ class LLMClient:
 
         attempts = 2 if schema is not None else 1
         for attempt in range(attempts):
-            result = await self._call(prompt, model, temperature, max_output_tokens, schema)
+            result = await self._call(prompt, model, temperature, max_output_tokens, schema, thinking_level)
             await self._record(run_id, purpose, result)
             if schema is None:
                 await self._cache_set(key, result.text)
@@ -230,11 +258,13 @@ class LLMClient:
         temperature: float,
         max_output_tokens: int,
         schema: type[BaseModel] | None,
+        thinking_level: str | None = DEFAULT_THINKING_LEVEL,
     ) -> LLMResult[Any]:
         lc = self.cfg.llm_client
         retry = 0
+        overloaded = 0
         while True:
-            config = self._build_config(model, temperature, max_output_tokens, schema)
+            config = self._build_config(model, temperature, max_output_tokens, schema, thinking_level)
             start = time.perf_counter()
             try:
                 async with self._sem:
@@ -244,8 +274,29 @@ class LLMClient:
                     self._no_thinking.add(model)
                     log.warning("thinking_level rejected, dropping thinking_config", extra={"model": model})
                     continue
+                overloaded += _is_overloaded(e)
+                fallback = self.cfg.models.llm_light
+                exhausted = _is_daily_quota(e)
+                if (
+                    overloaded > lc.fallback_after_503_retries or exhausted
+                ) and model == self.cfg.models.llm_main != fallback:
+                    # the main model keeps answering 503 "high demand": finish this call on the light model
+                    log.warning(
+                        "llm model unavailable, falling back for this call",
+                        extra={
+                            "model": model,
+                            "fallback": fallback,
+                            "after_503s": overloaded,
+                            "daily_quota": exhausted,
+                        },
+                    )
+                    model, overloaded = fallback, 0
+                    continue
                 if _is_retryable(e) and retry < lc.retries:
                     delay = min(lc.backoff_max_s, lc.backoff_base_s * 2**retry) * (0.5 + random.random() / 2)
+                    server_delay = _server_retry_delay(e)
+                    if server_delay is not None:
+                        delay = max(delay, min(server_delay, lc.backoff_max_s * 4))
                     retry += 1
                     log.warning(
                         "llm call failed, retrying",
@@ -270,14 +321,19 @@ class LLMClient:
             )
 
     def _build_config(
-        self, model: str, temperature: float, max_output_tokens: int, schema: type[BaseModel] | None
+        self,
+        model: str,
+        temperature: float,
+        max_output_tokens: int,
+        schema: type[BaseModel] | None,
+        thinking_level: str | None = DEFAULT_THINKING_LEVEL,
     ) -> types.GenerateContentConfig:
         kwargs: dict[str, Any] = {"temperature": temperature, "max_output_tokens": max_output_tokens}
         if schema is not None:
             kwargs["response_mime_type"] = "application/json"
             kwargs["response_schema"] = schema
-        if model not in self._no_thinking:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+        if thinking_level and model not in self._no_thinking:
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
         return types.GenerateContentConfig(**kwargs)
 
     def _cost(self, model: str, input_tokens: int, output_tokens: int) -> float | None:

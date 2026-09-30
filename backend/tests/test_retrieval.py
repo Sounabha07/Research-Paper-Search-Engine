@@ -5,7 +5,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.routers import search as search_router
-from retrieval.search import Filters, PaperHit, Passage, apply_prior, cap_per_paper, merge_query_lists, rrf_fuse
+from retrieval.search import (
+    Filters,
+    PaperHit,
+    Passage,
+    apply_prior,
+    cap_per_paper,
+    keep_pinned,
+    merge_query_lists,
+    name_matches,
+    rrf_fuse,
+    title_name,
+)
 
 
 def test_rrf_fuse_and_merge() -> None:
@@ -56,3 +67,42 @@ def test_search_endpoint_needs_models() -> None:
     r = TestClient(app).get("/search", params={"q": "lora"})
     assert r.status_code == 503
     assert TestClient(app).get("/search", params={"q": "x"}).status_code == 422  # min length 2
+
+
+def test_min_kept_overrides_floor() -> None:
+    hits = [
+        _hit("a", 0.03, 0.0),
+        _hit("b", 0.02, 0.0),
+        _hit("c", 0.01, 0.0),
+        _hit("d", 0.004, 0.0),
+        _hit("e", 0.5, 0.0),
+    ]
+    out = apply_prior(hits, prior_boost_max=0.05, min_score=0.05, min_kept=3)
+    assert [h.arxiv_id for h in out] == ["e", "a", "b"]  # e passes the floor; a, b kept as top 3
+
+
+def test_name_match() -> None:
+    assert title_name("QLoRA: Efficient Finetuning of Quantized LLMs") == "QLoRA"
+    assert title_name("Attention Is All You Need") is None
+    assert name_matches("QLoRA: Efficient Finetuning", ["How does QLoRA extend LoRA?"])
+    assert not name_matches("LoRA: Low-Rank Adaptation", ["qlora and dora"])  # whole terms only
+    assert name_matches("LoRA: Low-Rank Adaptation", ["How does QLoRA extend LoRA?"])
+    assert name_matches("Speculative Decoding: Exploiting Speculative Execution", ["what is speculative decoding"])
+    assert not name_matches(
+        "FlashAttention-2: Faster Attention", ["flashattention"]
+    )  # FlashAttention-2 != FlashAttention
+
+
+def test_keep_pinned() -> None:
+    hits = [_hit("a", 0.9, 0.0), _hit("b", 0.8, 0.0), _hit("c", 0.7, 0.0), _hit("p", 0.01, 0.0)]
+    for h in hits:
+        h.final_score = h.rerank_score
+    selected = [h for h in hits if h.rerank_score >= 0.05]  # the pinned paper is below the floor
+    out = keep_pinned(hits, selected, ["p"], limit=3)
+    assert [h.arxiv_id for h in out] == ["a", "b", "p"]  # pinned kept, search fills the other 2 slots
+
+
+def test_restrict_filter() -> None:
+    cond, params = Filters(categories=("cs.LG",), restrict_ids=("2106.09685", "2305.14314")).sql(3)
+    assert "p.arxiv_id = ANY($4::text[])" in cond
+    assert params == [["cs.LG"], ["2106.09685", "2305.14314"]]

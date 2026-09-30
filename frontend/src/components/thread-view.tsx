@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ModeToggle } from "@/components/mode-toggle";
 import { RunView } from "@/components/run-view";
 import { ACTIVE, type Thread } from "@/lib/api-types";
 
@@ -9,6 +10,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [followUp, setFollowUp] = useState("");
+  const [mode, setMode] = useState<"quick" | "deep">("quick");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -35,7 +37,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       const res = await fetch(`/api/threads/${threadId}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: followUp.trim(), mode: "quick" }),
+        body: JSON.stringify({ question: followUp.trim(), mode }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       setFollowUp("");
@@ -45,6 +47,19 @@ export function ThreadView({ threadId }: { threadId: string }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const pin = async (arxivId: string) => {
+    await fetch(`/api/threads/${threadId}/pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ arxiv_id: arxivId }),
+    });
+    await load();
+  };
+  const unpin = async (arxivId: string) => {
+    await fetch(`/api/threads/${threadId}/pin/${arxivId}`, { method: "DELETE" });
+    await load();
   };
 
   if (!thread) return <p className="text-sm text-muted-foreground">{error ?? "Loading…"}</p>;
@@ -58,10 +73,24 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </a>
         )}
       </div>
+      {thread.pinned_papers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-xs">
+          <span className="font-medium">Pinned (always used):</span>
+          {thread.pinned_papers.map((p) => (
+            <span key={p} className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono">
+              <a href={`/papers/${p}`} className="hover:underline">{p}</a>
+              <button onClick={() => unpin(p)} aria-label={`Unpin ${p}`} className="text-muted-foreground hover:text-foreground">
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {thread.runs.map((r) => (
-        <RunView key={r.id} runId={r.id} onSettled={load} />
+        <RunView key={r.id} runId={r.id} onSettled={load} onPin={pin} />
       ))}
-      <form onSubmit={submit} className="flex gap-2">
+      <form onSubmit={submit} className="flex items-center gap-2">
+        <ModeToggle mode={mode} onChange={setMode} />
         <input
           value={followUp}
           onChange={(e) => setFollowUp(e.target.value)}

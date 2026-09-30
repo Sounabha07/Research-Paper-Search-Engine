@@ -7,7 +7,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - [x] 3. **Full text on demand**: fetcher service with global limiter and two queues, GROBID parsing with bibliography, chunking, chunk embeddings, PDF lifecycle and janitor, landmark prefetch, `POST /papers/{id}/fulltext`, `make warm`, reference resolution into citation edges and stubs, citation scores and PageRank. Report the reference resolution rate.
 - [x] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
 - [x] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
-- [ ] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
+- [x] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
 - [ ] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
 - [ ] 8. **Feeds, nightly jobs, eval, README**: digests, OAI-PMH nightly, eval suite with ablations, README with architecture diagram, setup, and eval results table (leave a placeholder for the demo video).
 
@@ -172,7 +172,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
     stubs 8.3% -> 4.6% (77 stubs removed), unresolved 48.4% -> 33.2%, ids needing the API 42 -> 14.
     (Milestone 3 reported 42.6% on its 128 papers.) Citation edges 3,392 -> 5,617.
 
-### Milestone 5 (done 2026-09-30, awaiting approval)
+### Milestone 5 (done 2026-09-30, approved)
 - Quick mode end to end in the worker (`research_run_job`, `agent/run.py`): REWRITE (flash-lite, JSON) ->
   FIND_PAPERS + PASSAGES (section 11 search with thread carryover and evidence reuse) -> READ (flash-lite, JSON,
   notes validated against the passages) -> WRITE (flash, temp 0.3; tags [[c:id]]/[[a:id]]) -> VERIFY (flash-lite,
@@ -210,3 +210,86 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
     (0.563) below derivative papers, so turn 2 cites derivatives; it is cited in turn 3.
   - READ initially returned only 3 notes; the prompt now asks for thorough extraction (6-18 notes afterwards).
 
+### Between milestones 5 and 6 (2026-09-30)
+Verifier
+- VERIFY now returns, per sentence, an exact span copied from the cited source. Code checks it
+  (`agent/verify.py`): NFKC, curly quotes/dashes folded, whitespace collapsed, at least 20 characters, and it must be a
+  substring of one of the sources that sentence cites. No valid span -> unsupported (removed). A partial rewrite
+  keeps its tags and must also come with a valid span. The span is stored with the sentence (`span`, `span_source`).
+- Name check (on by default): named terms in the sentence (tokens with 2+ capitals, or a capital and a digit,
+  e.g. QLoRA, GPT-4, NF4) must appear in the cited source text or its paper title; otherwise unsupported.
+  Added because the span check alone does not catch claims moved onto the wrong paper when both papers say similar things.
+- Adversarial test, `eval/verifier_adversarial.yaml` + `eval/verifier_adversarial.py` (`make eval-verifier`):
+  10 real sentences from the M5 answers, each with an altered version (3 wrong number, 3 claim moved to the wrong
+  paper, 2 facts from different experiments merged, 2 unsupported extensions).
+  | verifier | altered caught | originals wrongly removed |
+  | before (M5 verdict only, `--legacy`) | 8/10 (3 runs, stable) | 0/10 |
+  | exact span only (`--no-names`) | 8/10 (2 runs) | 0/10 |
+  | exact span + name check (default) | 10/10 (2 runs) | 0/10 and 1/10 |
+  Both earlier versions missed #5 and #6 (wrong paper). The one false alarm was #2, where no valid span was returned.
+- On all 50 real sentences from the M5 answers (`eval/verifier_real_sentences.py`): span + names kept 50/50;
+  span only kept 48, rewrote 1, and removed 1 (a correct FlashAttention "2-4x" sentence).
+
+Speed
+- Thinking levels: gemini-3.5-flash and flash-lite both accept minimal, low, medium, and high; minimal returns no
+  thought tokens. WRITE now uses `models.write_thinking_level: minimal`; the other calls stay at low.
+  WRITE on the same 5 prompts (`eval/bench_write.py`):
+  | thinking | mean time | mean output tokens | mean cost |
+  | low | 17.0 s | 2,629 | $0.0249 |
+  | minimal | ~8.4 s (3.8 / 5.9 / 7.8 / 16.0 s; the 5th ran on flash-lite after 503s, 2.4 s) | ~560 | ~$0.0063 |
+- CONSENSUS runs in parallel with VERIFY (both work from the draft; consensus is dropped if the deadline passes).
+- quick_timeout_s = 45. The 5 questions rerun end to end: 16-29 s each, all done, $0.013-0.022 per answer,
+  removed claims 0 / 5 / 0 / 1 / 3 (the stricter verifier removes more).
+- 503 fallback: after 2 retries on 503 (`llm_client.fallback_after_503_retries`), that call goes to gemini-3.5-flash-lite
+  and is logged ("llm model unavailable, falling back for this call"). Extension (not in the request): a 429 daily-quota
+  error on gemini-3.5-flash also falls back to flash-lite for that call. The API key is on the free tier:
+  gemini-3.5-flash allows 20 requests per day, and that limit was reached during this work, so later runs wrote with
+  flash-lite. flash-lite allows 15 requests per minute; the client now honors the server's retryDelay.
+
+Ranking
+- Name-match boost: if a paper title's part before a colon matches (case-insensitive) a term from the question or the
+  rewritten queries, `retrieval.name_match_boost` (0.1) is added after rerank; counted in `papers.name_matched`.
+- rerank_min_score = 0.05; the top `retrieval.min_papers_kept` (3) papers are always kept.
+- Reranker A/B (`eval/ab_reranker.py`, 7 questions: the 5 test questions + QLoRA + speculative decoding):
+  | model | median rerank latency | GPU weights | GPU peak |
+  | bge-reranker-base | 352 ms | 546 MB | 1,426 MB |
+  | BAAI/bge-reranker-v2-m3 | 902 ms | 1,084 MB | 2,654 MB |
+  v2-m3 puts the paper the question is about at the top where base did not: Huang's sensitivity proof #1 at 0.760
+  (base 0.094); QLoRA #1 at 0.719 (base 0.002, #20); the speculative-decoding landmark #6 (base #8). Other lists
+  were similar. Switched to v2-m3: clearly better on "about X" questions, at +550 ms and +1.2 GB GPU peak, which fits.
+  Worker RAM ~1.0 GB after the switch.
+- Also fixed: TEI parsing and chunking ran on the event loop and blocked the worker during deep-mode fetches
+  (progress stalled; FETCH overran its 90 s wait to 111 s). They now run in threads.
+
+### Milestone 6 (done 2026-09-30, awaiting approval)
+- Deep mode: REWRITE -> FIND_PAPERS -> FETCH -> CHAIN -> PASSAGES -> READ -> WRITE -> VERIFY || CONSENSUS.
+  - FETCH: selected papers without full text are enqueued as urgent; the run waits on `fetch:done:{id}` up to
+    fetch_wait_s (90 s), bounded by the run deadline, and streams progress. Papers still missing use their abstract.
+  - CHAIN: in-corpus references of the top 5 papers (up to 100) are reranked; up to 3 scoring at least the lowest
+    selected paper are added (`via_chain`), shown as "found via references of [n]".
+- Pinned papers (`POST /threads/{id}/pin`, `DELETE /threads/{id}/pin/{arxiv_id}`) are always selected.
+  "Ask about this paper" in the reader starts a thread limited to that paper and its in-corpus references;
+  follow-ups inherit the scope.
+- Live progress: `GET /runs/{id}/events` (SSE with heartbeats); the UI falls back to polling.
+- Cancel: `POST /runs/{id}/cancel` sets a flag checked between steps and during the fetch wait.
+- Resume: a per-run Redis lock; on worker start, `recover()` re-enqueues queued runs and resumes running ones from
+  their saved steps (verify/consensus/error rows are redone). A resumed run gets at least `agent.resume_grace_s`
+  (60 s) more, because restart plus model loading takes ~90 s.
+- Mode toggle (Quick/Deep) on the ask box and for follow-ups.
+- Fetcher: failed metadata batches are retried at the back of the bulk queue, up to 3 rounds; arXiv API queries
+  give up after 2 attempts.
+- Tests (topics with no cached full text):
+  | question | status | total | cost | FETCH | selected: full text / abstract | CHAIN added |
+  | watermarking text generated by LLMs | timed_out | 127.5 s | $0.0104 | 12 requested, 7 ready, 5 pending, waited 111.2 s (before the event-loop fix) | 7 / 8 | 3 |
+  | sunflower conjecture | done | 122.6 s | $0.0377 | 12/12 ready in 83.1 s | 12 / 1 | 1 |
+  - CHAIN, run 1 (100 candidates): 2401.13927 via 2402.14904; 2306.17439 via 2502.02787; 2308.00221 via 2402.14904.
+    Run 2 (23 candidates): 2401.01800 via 2408.04165.
+  - Run 1 wrote on flash-lite (the daily flash quota was used up). Run 2 removed 2 claims.
+  - Cancel during FETCH: stopped within 2 s. Resume: worker restarted mid-FETCH; the run continued from step 3
+    with no duplicate steps. Before the grace budget it was already past its deadline, so FETCH/CHAIN were skipped
+    (timed_out, 167 s). The "max retries 1 exceeded" log line is arq refusing to rerun the original job; the
+    `resume:` job is the one that continues.
+- Open issues:
+  - Deep runs take 120-130 s, and the answers treat preprints as settled: the sunflower answer says the conjecture
+    "was proven", citing preprint 2212.13609.
+  - Free-tier Gemini quota (20 flash requests per day) limits testing; quality numbers after the limit is hit are flash-lite.

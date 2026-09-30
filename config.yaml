@@ -24,9 +24,10 @@ chunking:
 models:
   embedding: BAAI/bge-small-en-v1.5   # 384 dims
   embedding_query_prefix: "Represent this sentence for searching relevant passages: "
-  reranker: BAAI/bge-reranker-base
+  reranker: BAAI/bge-reranker-v2-m3   # A/B vs bge-reranker-base: PROGRESS.md
   llm_main: gemini-3.5-flash
   llm_light: gemini-3.5-flash-lite
+  write_thinking_level: minimal      # WRITE only; other calls use "low" (spec 6.7). flash accepts minimal|low|medium|high
 retrieval:
   paper_keyword_k: 100               # per query, over title + abstract
   paper_vector_k: 100
@@ -34,7 +35,9 @@ retrieval:
   chunk_keyword_k: 50                # within the selected papers only
   chunk_vector_k: 50
   rrf_k: 60
-  rerank_min_score: 0.1              # papers below are dropped (an answer may use fewer than papers_for_answer); tune with eval
+  rerank_min_score: 0.05             # papers below are dropped (an answer may use fewer than papers_for_answer); tune with eval
+  min_papers_kept: 3                 # ...but the top 3 are always kept
+  name_match_boost: 0.1              # title part before a colon ("QLoRA: ...") named in the question or queries
   anchor_k: 5                        # top landmark/foundational papers that always join the rerank candidates
   hnsw_ef_search: 100
   prior_boost_max: 0.05              # composite-score boost after rerank, capped
@@ -44,8 +47,9 @@ agent:
   passages_for_answer: 25
   max_passages_per_paper: 3
   fetch_wait_s: 90                   # deep mode: max wait for full-text fetches
-  quick_timeout_s: 20
+  quick_timeout_s: 45
   deep_timeout_s: 120
+  resume_grace_s: 60                 # a run resumed after a worker restart gets at least this much time left
   max_notes: 50
   verify_batch_size: 5
   consensus_claims: 3
@@ -56,6 +60,7 @@ agent:
 llm_client:
   max_concurrency: 4
   retries: 5
+  fallback_after_503_retries: 2      # after this many 503 retries on llm_main, finish the call on llm_light
   backoff_base_s: 1
   backoff_max_s: 30
   cache_ttl_days: 7

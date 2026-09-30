@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Badges } from "@/components/badges";
@@ -77,6 +77,9 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [fullTextStatus, setFullTextStatus] = useState<string | null>(null);
   const markRef = useRef<HTMLElement | null>(null);
+  const router = useRouter();
+  const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -101,6 +104,19 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
   const hl = chunk ? { s: chunk.start, e: chunk.end } : null;
   const abstractHl = chunkParam === "abstract";
 
+  const askAboutPaper = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (ask.trim().length < 3) return;
+    setAsking(true);
+    const res = await fetch("/api/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: ask.trim(), mode: "quick", pinned_papers: [arxivId], scope: "paper" }),
+    });
+    if (res.ok) router.push(`/threads/${((await res.json()) as { thread_id: string }).thread_id}`);
+    else setAsking(false);
+  };
+
   const requestFullText = async () => {
     setFullTextStatus("requesting…");
     const res = await fetch(`/api/papers/${arxivId}/fulltext`, { method: "POST" });
@@ -124,6 +140,19 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
         </p>
         <Badges badges={paper.badges} />
       </header>
+
+      <form onSubmit={askAboutPaper} className="flex gap-2">
+        <input
+          value={ask}
+          onChange={(e) => setAsk(e.target.value)}
+          placeholder="Ask about this paper (searches it and the papers it cites)…"
+          className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+        />
+        <button type="submit" disabled={asking}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50">
+          Ask
+        </button>
+      </form>
 
       {!paper.full_text && (
         <div className="flex items-center gap-3 text-sm">

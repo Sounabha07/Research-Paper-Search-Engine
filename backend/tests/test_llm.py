@@ -163,3 +163,60 @@ async def test_log_failure_does_not_break_call(cfg: AppConfig) -> None:
     fake = FakeGenai([_resp("ok")])
     client = LLMClient(cfg, client=fake, call_logger=broken, sleep=_no_sleep)  # type: ignore[arg-type]
     assert (await client.generate("p", model="m", purpose="t")).text == "ok"
+
+
+async def test_503_falls_back_to_light_model_after_two_retries(cfg: AppConfig) -> None:
+    main, light = cfg.models.llm_main, cfg.models.llm_light
+    fake = FakeGenai([_api_error(503, "high demand")] * 3 + [_resp("from light")])
+    models_called: list[str] = []
+    original = fake._generate
+
+    async def spy(*, model: str, contents: str, config: Any) -> Any:
+        models_called.append(model)
+        return await original(model=model, contents=contents, config=config)
+
+    fake.aio.models.generate_content = spy
+    client, records = _client(cfg, fake)
+    r = await client.generate("p", model=main, purpose="write")
+    assert models_called == [main, main, main, light]  # 2 retries on main, then the light model
+    assert r.model == light and r.text == "from light"
+    assert records[0].model == light
+
+
+async def test_light_model_503_is_not_redirected(cfg: AppConfig) -> None:
+    fake = FakeGenai([_api_error(503, "busy")] * 3 + [_resp("ok")])
+    client, _ = _client(cfg, fake)
+    r = await client.generate("p", model=cfg.models.llm_light, purpose="read")
+    assert r.model == cfg.models.llm_light
+
+
+async def test_server_retry_delay_is_honored(cfg: AppConfig) -> None:
+    err = genai_errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED",
+        "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "7s"}]}})  # fmt: skip
+    fake = FakeGenai([err, _resp("ok")])
+    sleeps: list[float] = []
+
+    async def sleep(s: float) -> None:
+        sleeps.append(s)
+
+    client = LLMClient(cfg, client=fake, sleep=sleep)  # type: ignore[arg-type]
+    await client.generate("p", model="m", purpose="t")
+    assert sleeps and sleeps[0] >= 7.0
+
+
+async def test_thinking_level_per_call(cfg: AppConfig) -> None:
+    fake = FakeGenai([_resp("a"), _resp("b")])
+    client, _ = _client(cfg, fake)
+    await client.generate("p1", model="m", purpose="t", thinking_level="minimal")
+    await client.generate("p2", model="m", purpose="t", thinking_level=None)
+    assert fake.configs[0].thinking_config.thinking_level.lower() == "minimal"
+    assert fake.configs[1].thinking_config is None
+
+
+async def test_daily_quota_on_main_falls_back_immediately(cfg: AppConfig) -> None:
+    quota = genai_errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+        "message": "Quota exceeded, quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier"}})  # fmt: skip
+    fake = FakeGenai([quota, _resp("light answer")])
+    client, _ = _client(cfg, fake)
+    r = await client.generate("p", model=cfg.models.llm_main, purpose="write")
+    assert r.model == cfg.models.llm_light and r.text == "light answer"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Any, ClassVar
 
@@ -115,6 +116,14 @@ async def recover(redis: ArqRedis, deps: PipelineDeps) -> None:
             n += bool(await redis.enqueue_job("chunk_paper", r["arxiv_id"], _job_id=f"chunk:{r['arxiv_id']}"))
     if n:
         log.info("re-enqueued in-flight papers", extra={"count": n})
+    # Spec 12: runs left 'running' by a restart resume from their last completed step; queued runs whose
+    # job was lost are queued again (a duplicate job is harmless: execute_run holds a per-run lock).
+    runs = await deps.pool.fetch("SELECT id, status FROM research_runs WHERE status IN ('queued', 'running')")
+    for r in runs:
+        job_id = f"run:{r['id']}" if r["status"] == "queued" else f"run:{r['id']}:resume:{int(time.time())}"
+        await redis.enqueue_job("research_run_job", str(r["id"]), _job_id=job_id)
+    if runs:
+        log.info("re-enqueued unfinished research runs", extra={"count": len(runs)})
 
 
 async def startup(ctx: dict[str, Any]) -> None:

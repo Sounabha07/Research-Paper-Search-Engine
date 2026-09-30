@@ -26,8 +26,8 @@ def pdf_job(arxiv_id: str) -> str:
     return json.dumps({"type": "pdf", "arxiv_id": arxiv_id})
 
 
-def meta_job(ids: list[str]) -> str:
-    return json.dumps({"type": "meta", "ids": ids})
+def meta_job(ids: list[str], attempt: int = 1) -> str:
+    return json.dumps({"type": "meta", "ids": ids, "attempt": attempt})
 
 
 def parse_job(raw: str) -> dict[str, Any]:

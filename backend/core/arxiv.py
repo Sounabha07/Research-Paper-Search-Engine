@@ -147,8 +147,9 @@ class ArxivClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _get(self, url: str, params: dict[str, str] | None = None) -> httpx.Response:
-        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+    async def _get(self, url: str, params: dict[str, str] | None = None, max_attempts: int = 0) -> httpx.Response:
+        max_attempts = max_attempts or self.MAX_ATTEMPTS
+        for attempt in range(1, max_attempts + 1):
             await self._limiter.wait()
             started = time.monotonic()
             try:
@@ -170,9 +171,9 @@ class ArxivClient:
                     "arxiv throttled",
                     extra={"url": url, "status": resp.status_code, "attempt": attempt, "delay_s": round(delay, 1)},
                 )
-            if attempt < self.MAX_ATTEMPTS:
+            if attempt < max_attempts:
                 await self._sleep(delay)
-        raise FetchError(f"gave up on {url} after {self.MAX_ATTEMPTS} attempts")
+        raise FetchError(f"gave up on {url} after {max_attempts} attempts")
 
     def _backoff(self, attempt: int) -> float:
         return float(min(self.BACKOFF_MAX_S, self.BACKOFF_BASE_S * 2 ** (attempt - 1)) * (0.75 + random.random() / 2))
@@ -189,7 +190,8 @@ class ArxivClient:
         """Metadata for up to 100 ids (spec 6.2b). Only for referenced ids missing from the DB."""
         if not 0 < len(ids) <= 100:
             raise ValueError("query_ids takes 1 to 100 ids")
-        resp = await self._get(QUERY_URL, {"id_list": ",".join(ids), "max_results": "100"})
+        # low priority: few attempts, the caller re-queues, so urgent PDF fetches are not stuck behind backoff
+        resp = await self._get(QUERY_URL, {"id_list": ",".join(ids), "max_results": "100"}, max_attempts=2)
         return parse_atom(resp.text)
 
 

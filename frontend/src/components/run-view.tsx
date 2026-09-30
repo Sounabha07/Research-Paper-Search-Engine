@@ -11,6 +11,8 @@ const POLL_MS = 1000;
 const STEP_LABEL: Record<string, string> = {
   rewrite: "Rewrote the question",
   find_papers: "Found papers",
+  fetch: "Fetched full text",
+  chain: "Followed references",
   passages: "Selected passages",
   read: "Read passages",
   write: "Wrote the answer",
@@ -18,37 +20,62 @@ const STEP_LABEL: Record<string, string> = {
   consensus: "Checked consensus",
 };
 
+/** Loads a run and follows it live: server-sent events (/runs/{id}/events) trigger reloads and carry fetch
+ * progress; if the stream fails, it falls back to polling. */
 export function useRun(runId: string, onSettled?: () => void) {
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
   useEffect(() => {
     let stop = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async () => {
+    let source: EventSource | null = null;
+    let settled = false;
+    const load = async (): Promise<Run | null> => {
       try {
         const res = await fetch(`/api/runs/${runId}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as Run;
-        if (stop) return;
+        if (stop) return null;
         setRun(body);
         setError(null);
-        if (ACTIVE.has(body.status)) timer = setTimeout(load, POLL_MS);
-        else onSettled?.();
-      } catch (e) {
-        if (!stop) {
-          setError(e instanceof Error ? e.message : "failed to load run");
-          timer = setTimeout(load, POLL_MS * 3);
+        if (!ACTIVE.has(body.status) && !settled) {
+          settled = true;
+          source?.close();
+          setProgress(null);
+          onSettled?.();
         }
+        return body;
+      } catch (e) {
+        if (!stop) setError(e instanceof Error ? e.message : "failed to load run");
+        return null;
       }
     };
-    load();
+    const poll = async () => {
+      const body = await load();
+      if (!stop && (!body || ACTIVE.has(body.status))) timer = setTimeout(poll, POLL_MS);
+    };
+    load().then((body) => {
+      if (stop || !body || !ACTIVE.has(body.status)) return;
+      source = new EventSource(`/api/runs/${runId}/events`);
+      source.onmessage = (ev) => {
+        const data = JSON.parse(ev.data) as { progress?: string; status?: string; type?: string };
+        if (data.progress) setProgress(data.progress);
+        else load();
+      };
+      source.onerror = () => {
+        source?.close();
+        if (!stop && !settled) poll();
+      };
+    });
     return () => {
       stop = true;
+      source?.close();
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
-  return { run, error };
+  return { run, error, progress };
 }
 
 function Chip({ number, sources, run }: { number: number; sources: Source[]; run: Run }) {
@@ -102,7 +129,7 @@ function SentenceView({ s, run }: { s: Sentence; run: Run }) {
   );
 }
 
-function Answer({ run }: { run: Run }) {
+function Answer({ run, onPin }: { run: Run; onPin?: (arxivId: string) => void }) {
   const kept = run.sentences.filter((s) => s.verdict !== "unsupported_removed");
   const removed = run.sentences.filter((s) => s.verdict === "unsupported_removed");
   const sections: { title: string; sentences: Sentence[] }[] = [];
@@ -163,7 +190,17 @@ function Answer({ run }: { run: Run }) {
                 {p.sections_used.length > 0 && (
                   <span className="text-xs text-muted-foreground"> · sections: {p.sections_used.join(", ")}</span>
                 )}
-                {p.via_chain && <span className="text-xs text-muted-foreground"> · found via references of {p.via_chain}</span>}
+                {p.via_chain && (
+                  <span className="text-xs text-muted-foreground">
+                    {" "}· found via references of{" "}
+                    {run.papers[p.via_chain]?.number ? `[${run.papers[p.via_chain].number}]` : p.via_chain}
+                  </span>
+                )}
+                {onPin && (
+                  <button onClick={() => onPin(arxivId)} className="ml-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                    pin
+                  </button>
+                )}
                 <span className="mt-0.5 block">
                   <Badges badges={p.badges} />
                 </span>
@@ -176,7 +213,7 @@ function Answer({ run }: { run: Run }) {
   );
 }
 
-function Trace({ run }: { run: Run }) {
+function Trace({ run, progress }: { run: Run; progress: string | null }) {
   return (
     <ol className="flex flex-col gap-2 text-xs">
       {run.steps.map((s) => {
@@ -200,11 +237,30 @@ function Trace({ run }: { run: Run }) {
                       <span className="text-foreground">{sp.title}</span> ({sp.year}) ·{" "}
                       {sp.full_text ? "full text" : "abstract only"} · {sp.rerank_score.toFixed(2)}
                       {sp.via_anchor && " · anchor"}
+                      {sp.pinned && " · pinned"}
+                      {sp.via_chain && " · via references"}
                       {sp.carryover && " · from earlier in thread"}
                     </span>
                   </li>
                 ))}
               </ol>
+            )}
+            {s.type === "fetch" && (
+              <div className="text-muted-foreground">
+                {Number(p.requested) === 0
+                  ? "all selected papers already had full text"
+                  : `${p.ready} of ${p.requested} now full text in ${p.waited_s} s` +
+                    ((p.still_missing as string[]).length ? ` · ${(p.still_missing as string[]).length} still pending (abstract used)` : "")}
+              </div>
+            )}
+            {s.type === "chain" && (
+              <div className="text-muted-foreground">
+                {(p.added as { title: string }[]).length === 0
+                  ? `no reference scored high enough (${p.candidates} checked)`
+                  : (p.added as { title: string; rerank_score: number }[]).map((a) => (
+                      <div key={a.title}>+ {a.title} ({a.rerank_score.toFixed(2)})</div>
+                    ))}
+              </div>
             )}
             {s.type === "passages" && (
               <div className="text-muted-foreground">{(p.passages as unknown[]).length} passages</div>
@@ -224,31 +280,53 @@ function Trace({ run }: { run: Run }) {
           </li>
         );
       })}
-      {ACTIVE.has(run.status) && <li className="animate-pulse px-2 text-muted-foreground">working…</li>}
+      {ACTIVE.has(run.status) && (
+        <li className="animate-pulse px-2 text-muted-foreground">{progress ?? "working…"}</li>
+      )}
     </ol>
   );
 }
 
-export function RunView({ runId, onSettled }: { runId: string; onSettled?: () => void }) {
-  const { run, error } = useRun(runId, onSettled);
+export function RunView({ runId, onSettled, onPin }: {
+  runId: string; onSettled?: () => void; onPin?: (arxivId: string) => void;
+}) {
+  const { run, error, progress } = useRun(runId, onSettled);
+  const [cancelling, setCancelling] = useState(false);
   if (!run) return <p className="text-sm text-muted-foreground">{error ?? "Loading…"}</p>;
+  const cancel = async () => {
+    setCancelling(true);
+    await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+  };
   return (
     <article className="flex flex-col gap-3 border-b border-border pb-8">
-      <h2 className="text-lg font-semibold">{run.question}</h2>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="text-lg font-semibold">
+          {run.question}
+          {run.mode === "deep" && <span className="ml-2 rounded bg-muted px-1.5 py-px align-middle text-[11px] font-normal">deep</span>}
+        </h2>
+        {ACTIVE.has(run.status) && (
+          <button onClick={cancel} disabled={cancelling}
+            className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50">
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        )}
+      </div>
       {run.standalone_question && run.standalone_question !== run.question && (
         <p className="-mt-2 text-xs text-muted-foreground">Understood as: {run.standalone_question}</p>
       )}
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <aside>
-          <Trace run={run} />
+          <Trace run={run} progress={progress} />
         </aside>
         <div>
           {ACTIVE.has(run.status) ? (
             <p className="text-sm text-muted-foreground">Working on it…</p>
           ) : run.status === "failed" ? (
             <p className="text-sm text-destructive">This run failed. See the trace for the error.</p>
+          ) : run.status === "cancelled" ? (
+            <p className="text-sm text-muted-foreground">Cancelled.</p>
           ) : (
-            <Answer run={run} />
+            <Answer run={run} onPin={onPin} />
           )}
         </div>
       </div>

@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 import asyncpg
 from arq.connections import ArqRedis
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent.bibtex import bibtex
+from agent.run import cancel_key
 from agent.threads import citation_numbers
+from core.redis import get_redis, run_channel
 
 router = APIRouter(tags=["threads"])
 
@@ -28,6 +33,12 @@ class NewThread(BaseModel):
     mode: Literal["quick", "deep"] = "quick"
     filters: RunFilters = Field(default_factory=RunFilters)
     pinned_papers: list[str] = Field(default_factory=list)
+    # "paper": "Ask about this paper" - search only the pinned papers and their in-corpus references
+    scope: Literal["all", "paper"] = "all"
+
+
+class PinBody(BaseModel):
+    arxiv_id: str
 
 
 class NewRun(BaseModel):
@@ -43,11 +54,6 @@ def _pool(request: Request) -> asyncpg.Pool:
     return pool
 
 
-def _check_mode(mode: str) -> None:
-    if mode == "deep":
-        raise HTTPException(status_code=400, detail="deep mode arrives in milestone 6; use mode=quick")
-
-
 async def _enqueue(request: Request, run_id: uuid.UUID) -> None:
     arq: ArqRedis = request.app.state.arq
     await arq.enqueue_job("research_run_job", str(run_id), _job_id=f"run:{run_id}")
@@ -55,9 +61,22 @@ async def _enqueue(request: Request, run_id: uuid.UUID) -> None:
 
 @router.post("/threads")
 async def create_thread(body: NewThread, request: Request) -> dict[str, str]:
-    _check_mode(body.mode)
     pool = _pool(request)
+    filters = body.filters.model_dump()
     async with pool.acquire() as conn, conn.transaction():
+        if body.pinned_papers:
+            known = await conn.fetch("SELECT arxiv_id FROM papers WHERE arxiv_id = ANY($1)", body.pinned_papers)
+            if len(known) != len(set(body.pinned_papers)):
+                raise HTTPException(status_code=404, detail="pinned paper not in corpus")
+        if body.scope == "paper":
+            if not body.pinned_papers:
+                raise HTTPException(status_code=422, detail="scope=paper needs pinned_papers")
+            refs = await conn.fetch(
+                "SELECT DISTINCT e.cited_id FROM citation_edges e JOIN papers p ON p.arxiv_id = e.cited_id"
+                " WHERE e.citing_id = ANY($1)",
+                body.pinned_papers,
+            )
+            filters["restrict_ids"] = list(dict.fromkeys([*body.pinned_papers, *(r["cited_id"] for r in refs)]))
         thread_id = await conn.fetchval(
             "INSERT INTO threads (title, pinned_papers) VALUES ($1, $2) RETURNING id",
             body.question[:200], body.pinned_papers,
@@ -65,7 +84,7 @@ async def create_thread(body: NewThread, request: Request) -> dict[str, str]:
         run_id = await conn.fetchval(
             "INSERT INTO research_runs (thread_id, turn, question, mode, filters) VALUES ($1, 1, $2, $3, $4)"
             " RETURNING id",
-            thread_id, body.question, body.mode, body.filters.model_dump_json(),
+            thread_id, body.question, body.mode, json.dumps(filters),
         )  # fmt: skip
     await _enqueue(request, run_id)
     return {"thread_id": str(thread_id), "run_id": str(run_id)}
@@ -73,8 +92,8 @@ async def create_thread(body: NewThread, request: Request) -> dict[str, str]:
 
 @router.post("/threads/{thread_id}/runs")
 async def follow_up(thread_id: uuid.UUID, body: NewRun, request: Request) -> dict[str, str]:
-    _check_mode(body.mode)
     pool = _pool(request)
+    filters = body.filters.model_dump()
     async with pool.acquire() as conn, conn.transaction():
         if await conn.fetchval("SELECT 1 FROM threads WHERE id = $1 FOR UPDATE", thread_id) is None:
             raise HTTPException(status_code=404, detail="thread not found")
@@ -86,10 +105,14 @@ async def follow_up(thread_id: uuid.UUID, body: NewRun, request: Request) -> dic
         turn = await conn.fetchval(
             "SELECT coalesce(max(turn), 0) + 1 FROM research_runs WHERE thread_id = $1", thread_id
         )
+        first = await conn.fetchval("SELECT filters FROM research_runs WHERE thread_id = $1 AND turn = 1", thread_id)
+        restrict = (_j(first) or {}).get("restrict_ids") if first else None
+        if restrict:  # a thread started with "Ask about this paper" keeps its scope
+            filters["restrict_ids"] = restrict
         run_id = await conn.fetchval(
             "INSERT INTO research_runs (thread_id, turn, question, mode, filters) VALUES ($1, $2, $3, $4, $5)"
             " RETURNING id",
-            thread_id, turn, body.question, body.mode, body.filters.model_dump_json(),
+            thread_id, turn, body.question, body.mode, json.dumps(filters),
         )  # fmt: skip
     await _enqueue(request, run_id)
     return {"run_id": str(run_id)}
@@ -261,3 +284,88 @@ async def thread_bibtex(thread_id: uuid.UUID, request: Request) -> Response:
         bibtex(papers), media_type="application/x-bibtex",
         headers={"Content-Disposition": f'attachment; filename="thread-{thread_id}.bib"'},
     )  # fmt: skip
+
+
+@router.post("/threads/{thread_id}/pin")
+async def pin_paper(thread_id: uuid.UUID, body: PinBody, request: Request) -> dict[str, list[str]]:
+    pool = _pool(request)
+    if await pool.fetchval("SELECT 1 FROM papers WHERE arxiv_id = $1", body.arxiv_id) is None:
+        raise HTTPException(status_code=404, detail="paper not in corpus")
+    pinned = await pool.fetchval(
+        "UPDATE threads SET pinned_papers = CASE WHEN $2 = ANY(pinned_papers) THEN pinned_papers"
+        " ELSE array_append(pinned_papers, $2) END WHERE id = $1 RETURNING pinned_papers",
+        thread_id, body.arxiv_id,
+    )  # fmt: skip
+    if pinned is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    return {"pinned_papers": list(pinned)}
+
+
+@router.delete("/threads/{thread_id}/pin/{arxiv_id:path}")
+async def unpin_paper(thread_id: uuid.UUID, arxiv_id: str, request: Request) -> dict[str, list[str]]:
+    pinned = await _pool(request).fetchval(
+        "UPDATE threads SET pinned_papers = array_remove(pinned_papers, $2) WHERE id = $1 RETURNING pinned_papers",
+        thread_id, arxiv_id,
+    )  # fmt: skip
+    if pinned is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    return {"pinned_papers": list(pinned)}
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: uuid.UUID, request: Request) -> dict[str, str]:
+    """Spec 12: a Redis flag the worker checks between steps; a queued run is cancelled right away."""
+    pool = _pool(request)
+    status = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if status == "queued":
+        await pool.execute("UPDATE research_runs SET status = 'cancelled', finished_at = now() WHERE id = $1", run_id)
+        await get_redis().publish(run_channel(str(run_id)), json.dumps({"status": "cancelled"}))
+        return {"status": "cancelled"}
+    if status == "running":
+        await get_redis().set(cancel_key(run_id), "1", ex=3600)
+        return {"status": "cancelling"}
+    return {"status": status}
+
+
+FINAL = {"done", "timed_out", "failed", "cancelled"}
+SSE_HEARTBEAT_S = 15.0
+
+
+@router.get("/runs/{run_id}/events")
+async def run_events(run_id: uuid.UUID, request: Request) -> StreamingResponse:
+    """Spec 14: server-sent events for a run: steps, fetch progress, and status, until the run ends."""
+    pool = _pool(request)
+    status = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    async def stream() -> AsyncIterator[str]:
+        pubsub = get_redis().pubsub()
+        await pubsub.subscribe(run_channel(str(run_id)))
+        try:
+            current = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
+            yield f"data: {json.dumps({'status': current})}\n\n"
+            last = time.monotonic()
+            while current not in FINAL:
+                if await request.is_disconnected():
+                    break
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if msg is not None:
+                    yield f"data: {msg['data']}\n\n"
+                    last = time.monotonic()
+                    event = json.loads(msg["data"])
+                    if event.get("status") in FINAL:
+                        break
+                elif time.monotonic() - last > SSE_HEARTBEAT_S:
+                    # heartbeat, and a status check in case a message was missed
+                    current = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
+                    yield f": ping\n\ndata: {json.dumps({'status': current})}\n\n"
+                    last = time.monotonic()
+        finally:
+            await pubsub.unsubscribe()
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)

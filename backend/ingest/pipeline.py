@@ -100,7 +100,7 @@ async def parse_stage(deps: PipelineDeps, arxiv_id: str) -> str:
             result = await deps.grobid.process_fulltext(pdf, pdf_file.name)
             grobid_s += result.request_s
             tei = result.tei
-            parse_tei(tei)  # must be readable
+            await asyncio.to_thread(parse_tei, tei)  # must be readable; CPU-bound, keep it off the event loop
             break
         except (GrobidError, ET.ParseError) as e:
             errors.append(f"grobid: {e}")
@@ -155,8 +155,9 @@ async def chunk_embed_stage(deps: PipelineDeps, arxiv_id: str) -> str:
     if paper is None or paper["state"] not in ("parsed", "embedded"):
         return f"skip ({paper['state'] if paper else 'missing'})"
     if paper["state"] == "parsed":
-        doc: ParsedDoc = parse_tei(read_parsed(parsed_path(deps.settings, arxiv_id)))
-        _, chunks = chunk_document(doc, _count_tokens(deps.embedder), deps.cfg.chunking)
+        # parsing and tokenizing are CPU-bound: run them in a thread so the worker's event loop (searches,
+        # research runs waiting on fetches) keeps responding
+        doc, chunks = await asyncio.to_thread(_parse_and_chunk, deps, arxiv_id)
         vectors: Any = []
         if chunks:
             async with deps.gpu_lock:
@@ -175,6 +176,12 @@ async def chunk_embed_stage(deps: PipelineDeps, arxiv_id: str) -> str:
 
     stats = await finalize(deps, arxiv_id)
     return f"ready ({stats.resolved}/{stats.total} refs resolved)"
+
+
+def _parse_and_chunk(deps: PipelineDeps, arxiv_id: str) -> tuple[ParsedDoc, list[Chunk]]:
+    doc = parse_tei(read_parsed(parsed_path(deps.settings, arxiv_id)))
+    _, chunks = chunk_document(doc, _count_tokens(deps.embedder), deps.cfg.chunking)
+    return doc, chunks
 
 
 async def _write_chunks(conn: asyncpg.Connection, arxiv_id: str, chunks: list[Chunk], vectors: Any) -> None:

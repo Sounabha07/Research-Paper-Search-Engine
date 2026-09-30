@@ -1,0 +1,59 @@
+# Adversarial verifier test (run with: make eval-verifier).
+# Real sentences from test answers (originals, must pass) and altered versions (must be caught:
+# removed, or rewritten back to what the source supports). Source texts are read from the database
+# by id at run time (c:<chunk id>, a:<arxiv id> = the paper's abstract).
+cases:
+  - id: 1
+    type: wrong_number
+    sources: ["c:4432"]
+    original: "FlashAttention is up to 3x faster than standard attention across common sequence lengths and scales up to 64K."
+    altered: "FlashAttention is up to 5x faster than standard attention across common sequence lengths and scales up to 64K."
+  - id: 2
+    type: wrong_number
+    sources: ["c:5930"]
+    original: "By applying tiling and online softmax, FlashAttention reduces memory IOs without approximation to yield a 2-4x speedup."
+    altered: "By applying tiling and online softmax, FlashAttention reduces memory IOs without approximation to yield a 7-9x speedup."
+  - id: 3
+    type: wrong_number
+    sources: ["c:5661"]
+    original: "QLoRA reduces memory usage enough to fine-tune a 65B parameter model on a single 48GB GPU while preserving full 16-bit task performance."
+    altered: "QLoRA reduces memory usage enough to fine-tune a 65B parameter model on a single 24GB GPU while preserving full 16-bit task performance."
+  - id: 4
+    type: wrong_paper
+    # the claim is TaylorShift's (2403.02920); the altered case cites TLinFormer's abstract instead
+    sources: ["a:2403.02920"]
+    altered_sources: ["a:2508.20407"]
+    original: "TaylorShift enables computing full token-to-token interactions in linear time and space using a reformulation of the Taylor softmax."
+    altered: "TaylorShift enables computing full token-to-token interactions in linear time and space using a reformulation of the Taylor softmax."
+  - id: 5
+    type: wrong_paper
+    sources: ["a:2501.05730"]
+    original: "Element-wise attention uses the element-wise squared Euclidean distance and approximates the quadratic complexity term with a Taylor polynomial."
+    altered: "TLinFormer uses the element-wise squared Euclidean distance and approximates the quadratic complexity term with a Taylor polynomial."
+  - id: 6
+    type: wrong_paper
+    sources: ["c:5671"]
+    original: "QLoRA introduces Paged Optimizers to prevent memory spikes during gradient checkpointing from causing out-of-memory errors."
+    altered: "LoRA introduces Paged Optimizers to prevent memory spikes during gradient checkpointing from causing out-of-memory errors."
+  - id: 7
+    type: merged
+    # 33B on a single consumer GPU and 65B on a single professional GPU, merged into one claim
+    sources: ["c:5707", "c:5661"]
+    original: "QLoRA is the first method that enables the fine-tuning of 33B parameter models on a single consumer GPU without degrading performance relative to a full fine-tuning baseline."
+    altered: "QLoRA is the first method that enables the fine-tuning of 65B parameter models on a single consumer GPU without degrading performance relative to a full fine-tuning baseline."
+  - id: 8
+    type: merged
+    # BERT-large training (15% faster) and long-range arena (2.4x) and 64K scaling are different results
+    sources: ["c:4432"]
+    original: "Block-sparse FlashAttention enables a Transformer to scale to sequences of 64K, giving the first model with better-than-chance performance on Path-256."
+    altered: "FlashAttention trains BERT-large 2.4x faster than baselines on sequences of up to 64K."
+  - id: 9
+    type: unsupported_extension
+    sources: ["a:2406.08128"]
+    original: "CHELA replaces SSMs with short-long convolutions and implements linear attention in a divide-and-conquer manner."
+    altered: "CHELA replaces SSMs with short-long convolutions and implements linear attention in a divide-and-conquer manner, outperforming FlashAttention-2 on every Long Range Arena task."
+  - id: 10
+    type: unsupported_extension
+    sources: ["a:2510.23123"]
+    original: "In standard LoRA, all input tokens share the same weights and undergo an identical input-output projection."
+    altered: "In standard LoRA, all input tokens share the same weights and undergo an identical input-output projection, which makes LoRA underperform full fine-tuning on every benchmark."

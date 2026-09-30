@@ -6,13 +6,14 @@ COMPOSE := docker compose
 BACKEND := $(COMPOSE) run --rm --no-deps api
 
 .PHONY: help up down logs migrate status check-models test lint backup restore \
-        ingest-metadata landmarks warm fetch fulltext-report catalog resolve-refs score embed nightly eval
+        ingest-metadata landmarks warm fetch fulltext-report catalog resolve-refs score embed eval-verifier nightly eval
 
 help:
 	@echo "up | down | logs [S=service] | migrate | status | check-models | test | lint"
 	@echo "backup | restore FILE=<name>.dump"
 	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
 	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report | catalog | resolve-refs"
+	@echo "eval-verifier [ARGS=--legacy|--no-names]"
 	@echo "nightly | eval  (later milestones)"
 
 up:
@@ -90,6 +91,11 @@ catalog:
 
 resolve-refs:
 	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli resolve-all
+
+# Adversarial verifier test (eval/verifier_adversarial.yaml). ARGS="--legacy" or "--no-names" for comparisons.
+EVAL_RUN := $(COMPOSE) run --rm -v ./eval:/app/eval -e PYTHONPATH=/app/backend worker python
+eval-verifier:
+	$(EVAL_RUN) /app/eval/verifier_adversarial.py $(ARGS)
 
 nightly eval:
 	@echo "make $@ arrives in milestone 8" && exit 1

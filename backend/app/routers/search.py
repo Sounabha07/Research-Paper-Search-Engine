@@ -30,6 +30,7 @@ class PaperOut(BaseModel):
     prior: float
     final_score: float
     via_anchor: bool = False
+    name_match: bool = False
 
 
 class PassageOut(BaseModel):

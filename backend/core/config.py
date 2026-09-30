@@ -49,6 +49,7 @@ class ModelsConfig(_Section):
     reranker: str
     llm_main: str
     llm_light: str
+    write_thinking_level: str
 
 
 class RetrievalConfig(_Section):
@@ -59,6 +60,8 @@ class RetrievalConfig(_Section):
     chunk_vector_k: int
     rrf_k: int
     rerank_min_score: float | None
+    min_papers_kept: int
+    name_match_boost: float
     anchor_k: int
     hnsw_ef_search: int
     prior_boost_max: float
@@ -72,6 +75,7 @@ class AgentConfig(_Section):
     fetch_wait_s: int
     quick_timeout_s: int
     deep_timeout_s: int
+    resume_grace_s: int
     max_notes: int
     verify_batch_size: int
     consensus_claims: int
@@ -84,6 +88,7 @@ class AgentConfig(_Section):
 class LLMClientConfig(_Section):
     max_concurrency: int
     retries: int
+    fallback_after_503_retries: int
     backoff_base_s: float
     backoff_max_s: float
     cache_ttl_days: int

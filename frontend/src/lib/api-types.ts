@@ -40,6 +40,8 @@ export type SelectedPaper = {
   full_text: boolean;
   via_anchor?: boolean;
   carryover?: boolean;
+  pinned?: boolean;
+  via_chain?: string | null;
   badges: Record<string, unknown>;
 };
 

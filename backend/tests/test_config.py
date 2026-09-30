@@ -11,7 +11,7 @@ from tests.conftest import REPO_ROOT
 def test_repo_config_loads(cfg: AppConfig) -> None:
     assert cfg.corpus.categories_prefixes == ["cs.", "math."]
     assert cfg.models.embedding == "BAAI/bge-small-en-v1.5"
-    assert cfg.retrieval.rerank_min_score == 0.1 and cfg.retrieval.anchor_k == 5
+    assert cfg.retrieval.rerank_min_score == 0.05 and cfg.retrieval.anchor_k == 5
     assert cfg.arxiv.user_agent == "arxiv-research-engine/0.1 (mailto:test@example.com)"
     assert abs(sum(cfg.score_weights.model_dump().values()) - 1.0) < 1e-9
     assert len(cfg.venue_patterns) == 5

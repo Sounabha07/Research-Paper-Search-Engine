@@ -26,6 +26,7 @@ class NotesOut(BaseModel):
 class Verdict(BaseModel):
     index: int
     verdict: Literal["supported", "partial", "unsupported"]
+    span: str | None = None  # exact text copied from a cited source that supports the (rewritten) sentence
     rewrite: str | None = None
 
 
@@ -108,11 +109,15 @@ def verify_prompt(items: str) -> str:
 
 {items}
 
-For each sentence return {{"index": ..., "verdict": ..., "rewrite": ...}}:
+For each sentence return {{"index": ..., "verdict": ..., "span": ..., "rewrite": ...}}:
 - "supported": every claim in the sentence is stated or directly implied by its cited sources. rewrite = null.
 - "partial": part of the sentence is supported but part is not, or it overstates the sources. rewrite = the
   sentence rewritten to say only what the sources support, ending with the same source tags.
-- "unsupported": the sources do not support the sentence's main claim. rewrite = null.
+- "unsupported": the sources do not support the sentence's main claim. span = null, rewrite = null.
+- "span": for supported and partial, the passage from ONE cited source that supports the sentence (for partial:
+  the rewrite), copied character for character: an exact contiguous excerpt of the source text, at least a
+  clause long, with no paraphrasing, no omissions, and no added words. If you cannot copy such an excerpt, the
+  verdict is "unsupported".
 Judge only against the given source texts, not your own knowledge. Return JSON {{"results": [...]}}."""
 
 

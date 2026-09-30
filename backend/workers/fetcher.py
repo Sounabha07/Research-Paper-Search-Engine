@@ -24,7 +24,7 @@ from arq.connections import ArqRedis, RedisSettings
 
 from core.arxiv import ArxivClient, AtomEntry, FetchError, RateLimiter, file_stem
 from core.config import AppConfig, Settings, ensure_data_dirs, get_config, get_settings, require_env
-from core.fetchq import parse_job, pdf_job
+from core.fetchq import meta_job, parse_job, pdf_job
 from core.logging import setup_logging
 from core.redis import FETCH_BULK, FETCH_URGENT, FETCHER_HEARTBEAT, fetch_done_channel, get_redis
 from ingest import metrics
@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 HEARTBEAT_INTERVAL_S = 30
 POP_TIMEOUT_S = 5
 MAX_FETCH_FAILURES = 3
+MAX_META_ROUNDS = 3
 
 
 class Fetcher:
@@ -76,7 +77,7 @@ class Fetcher:
                 if job["type"] == "pdf":
                     await self.fetch_pdf(job["arxiv_id"], urgent=queue == FETCH_URGENT)
                 else:
-                    await self.fetch_meta(job["ids"])
+                    await self.fetch_meta(job["ids"], int(job.get("attempt", 1)))
             except Exception:
                 log.exception("fetch job crashed", extra={"job": raw})
 
@@ -127,7 +128,7 @@ class Fetcher:
             },
         )
 
-    async def fetch_meta(self, ids: list[str]) -> None:
+    async def fetch_meta(self, ids: list[str], attempt: int = 1) -> None:
         known = {
             r["arxiv_id"] for r in await self.pool.fetch("SELECT arxiv_id FROM papers WHERE arxiv_id = ANY($1)", ids)
         }
@@ -137,7 +138,13 @@ class Fetcher:
         try:
             entries = await self.client.query_ids(missing)
         except FetchError as e:
-            log.warning("arxiv metadata lookup failed", extra={"ids": len(missing), "error": str(e)})
+            requeue = attempt < MAX_META_ROUNDS
+            log.warning(
+                "arxiv metadata lookup failed",
+                extra={"ids": len(missing), "attempt": attempt, "requeued": requeue, "error": str(e)},
+            )
+            if requeue:  # back of the bulk queue: other work (and urgent fetches) go first
+                await cast(Awaitable[int], self.redis.rpush(FETCH_BULK, meta_job(missing, attempt + 1)))
             return
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.executemany(
