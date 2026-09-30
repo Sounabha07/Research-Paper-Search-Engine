@@ -33,16 +33,21 @@ def normalize(s: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", s).translate(_QUOTES).split())
 
 
+def _no_math_delims(s: str) -> str:
+    """Spans often drop the $...$ around LaTeX that the abstract has; compare without them."""
+    return " ".join(s.replace("$", " ").split())
+
+
 def find_span(span: str | None, sources: dict[str, SourceText], tags: list[str]) -> str | None:
     """The id of the cited source that contains the span, or None if the span is missing or invalid."""
     if not span:
         return None
-    needle = normalize(span).rstrip(".").strip()
+    needle = _no_math_delims(normalize(span)).rstrip(".").strip()
     if len(needle) < MIN_SPAN_CHARS:
         return None
     for tag in tags:
         src = sources.get(tag)
-        if src and needle in normalize(src.text):
+        if src and needle in _no_math_delims(normalize(src.text)):
             return tag
     return None
 

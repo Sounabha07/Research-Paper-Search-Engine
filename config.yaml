@@ -27,6 +27,7 @@ models:
   reranker: BAAI/bge-reranker-v2-m3   # A/B vs bge-reranker-base: PROGRESS.md
   llm_main: gemini-3.5-flash
   llm_light: gemini-3.5-flash-lite
+  write_model: gemini-3.5-flash-lite # WRITE; gemini-3.5-flash is the other option (comparison: PROGRESS.md)
   write_thinking_level: minimal      # WRITE only; other calls use "low" (spec 6.7). flash accepts minimal|low|medium|high
 retrieval:
   paper_keyword_k: 100               # per query, over title + abstract
@@ -62,6 +63,9 @@ llm_client:
   max_concurrency: 4
   retries: 5
   fallback_after_503_retries: 2      # after this many 503 retries on llm_main, finish the call on llm_light
+  rpm_limits:                        # proactive requests-per-minute caps, shared by all processes (free tier)
+    gemini-3.5-flash-lite: 14        # free tier: 15/min
+    gemini-3.5-flash: 9              # conservative; its binding free-tier limit is 20 requests/day
   backoff_base_s: 1
   backoff_max_s: 30
   cache_ttl_days: 7

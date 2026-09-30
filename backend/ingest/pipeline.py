@@ -196,12 +196,30 @@ async def _write_chunks(conn: asyncpg.Connection, arxiv_id: str, chunks: list[Ch
     )
 
 
+REFS_PENDING = "refs:pending"  # ready papers whose references are not resolved yet (re-done after a restart)
+
+
 async def finalize(deps: PipelineDeps, arxiv_id: str) -> ResolutionStats:
-    """Resolve references into edges (incremental), then mark ready and notify waiters."""
-    async with deps.pool.acquire() as conn, conn.transaction():
-        await lock_citation_graph(conn)
+    """Mark ready and notify waiters as soon as the chunks are embedded (answers need only the chunks), then
+    resolve references into edges. Resolution holds the global citation-graph lock, so papers finishing together
+    used to wait on each other before becoming usable (up to ~70 s for a deep-mode fetch of 8 papers)."""
+    # added before 'ready', so a crash in between is recovered
+    await deps.redis.sadd(REFS_PENDING, arxiv_id)  # type: ignore[misc]
+    await _set_state(deps.pool, arxiv_id, "ready")
+    await _publish_done(deps.redis, arxiv_id, "ready")
+    return await resolve_references(deps, arxiv_id)
+
+
+# Resolution is serialized by a Postgres advisory lock. Queue here first, so that papers waiting their turn do
+# not each hold one of the pool's few connections (8 waiting jobs starved a deep-mode run's own queries).
+_RESOLVE_LOCK = asyncio.Lock()
+
+
+async def resolve_references(deps: PipelineDeps, arxiv_id: str) -> ResolutionStats:
+    async with _RESOLVE_LOCK, deps.pool.acquire() as conn, conn.transaction():
+        await lock_citation_graph(conn)  # still needed against other processes (CLI backfills)
         stats = await resolve_for_paper(conn, arxiv_id, deps.cfg.corpus.stub_min_corpus_citations)
-        await _set_state(conn, arxiv_id, "ready")
+    await deps.redis.srem(REFS_PENDING, arxiv_id)  # type: ignore[misc]
     if stats.missing_arxiv_ids:
         await enqueue_meta(deps.redis, stats.missing_arxiv_ids)
     await metrics.record(deps.redis, arxiv_id, resolution=stats.as_dict())
@@ -214,5 +232,4 @@ async def finalize(deps: PipelineDeps, arxiv_id: str) -> ResolutionStats:
             "missing_arxiv_ids": len(stats.missing_arxiv_ids),
         },
     )
-    await _publish_done(deps.redis, arxiv_id, "ready")
     return stats

@@ -256,3 +256,17 @@ def test_altered_math_in_rewrite() -> None:
     assert altered_math("A family of $O(w^3 \",'log k)^k$ sets.", original, sources, ["a:1"]) == [
         "$O(w^3 \",'log k)^k$"
     ]
+
+
+def test_span_ignores_math_delimiters() -> None:
+    sources = {"a:1": SourceText("T", r"approximates the term $\exp(q_{ic}k_{jc})$ with a Taylor polynomial.")}
+    assert find_span(r"approximates the term \exp(q_{ic}k_{jc}) with a Taylor polynomial", sources, ["a:1"]) == "a:1"
+
+
+def test_mostly_untagged() -> None:
+    from agent.run import mostly_untagged
+
+    allowed = {"c:1", "c:2"}
+    assert mostly_untagged("One claim. Two claims. Three [[c:1]].", allowed)
+    assert not mostly_untagged("One [[c:1]]. Two [[c:2]]. Three.", allowed)
+    assert mostly_untagged("", allowed)

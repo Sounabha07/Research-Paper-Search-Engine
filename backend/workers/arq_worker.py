@@ -27,7 +27,15 @@ from core.logging import setup_logging
 from core.redis import ARQ_QUEUE, get_redis
 from ingest.grobid import GrobidClient
 from ingest.janitor import run_janitor
-from ingest.pipeline import MAX_PARSE_FAILURES, PipelineDeps, chunk_embed_stage, parse_stage, pdf_path
+from ingest.pipeline import (
+    MAX_PARSE_FAILURES,
+    REFS_PENDING,
+    PipelineDeps,
+    chunk_embed_stage,
+    parse_stage,
+    pdf_path,
+    resolve_references,
+)
 from retrieval.search import Filters, SearchModels, result_to_api, search
 
 log = logging.getLogger(__name__)
@@ -61,6 +69,12 @@ async def chunk_paper(ctx: dict[str, Any], arxiv_id: str) -> str:
     except TRANSIENT_DB_ERRORS as e:
         log.warning("transient db conflict, retrying", extra={"arxiv_id": arxiv_id, "error": type(e).__name__})
         raise Retry(defer=5) from e
+
+
+async def resolve_refs_job(ctx: dict[str, Any], arxiv_id: str) -> str:
+    """References of a ready paper left unresolved by a restart."""
+    stats = await resolve_references(ctx["deps"], arxiv_id)
+    return f"{stats.resolved}/{stats.total} refs resolved"
 
 
 async def search_job(ctx: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
@@ -114,6 +128,9 @@ async def recover(redis: ArqRedis, deps: PipelineDeps) -> None:
                 n += bool(await redis.enqueue_job("parse_paper", r["arxiv_id"], _job_id=f"parse:{r['arxiv_id']}"))
         else:
             n += bool(await redis.enqueue_job("chunk_paper", r["arxiv_id"], _job_id=f"chunk:{r['arxiv_id']}"))
+    for arxiv_id in await redis.smembers(REFS_PENDING):  # type: ignore[misc]
+        a = arxiv_id.decode() if isinstance(arxiv_id, bytes) else arxiv_id
+        n += bool(await redis.enqueue_job("resolve_refs_job", a, _job_id=f"refs:{a}"))
     if n:
         log.info("re-enqueued in-flight papers", extra={"count": n})
     # Spec 12: runs left 'running' by a restart resume from their last completed step; queued runs whose
@@ -179,6 +196,7 @@ class WorkerSettings:
         func(research_run_job, timeout=600, max_tries=1, keep_result=0),
         func(parse_paper, max_tries=MAX_PARSE_FAILURES + 1, timeout=900, keep_result=0),
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
+        func(resolve_refs_job, max_tries=3, timeout=900, keep_result=0),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),
         func(recompute_scores_job, timeout=3600, max_tries=1),
     ]

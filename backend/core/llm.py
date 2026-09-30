@@ -29,11 +29,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import AppConfig, ConfigError, get_config, require_env
+from core.ratelimit import RateLimiter
 
 log = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
-CACHE_PREFIX = "llmcache:"
+CACHE_PREFIX = "llmcache:v2:"  # v2: fallback answers are no longer cached under the requested model
 DEFAULT_THINKING_LEVEL = "low"  # spec 6.7
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
@@ -124,6 +125,15 @@ def _is_daily_quota(exc: BaseException) -> bool:
     return isinstance(exc, genai_errors.APIError) and exc.code == 429 and "PerDay" in str(exc)
 
 
+_QUOTA_VALUE = re.compile(r"quotaValue['\"]?\s*[:=]\s*['\"]?(\d+)")
+
+
+def quota_value(exc: BaseException) -> int | None:
+    """The limit Google reports in a 429 (e.g. the requests-per-day quota), if the error carries it."""
+    m = _QUOTA_VALUE.search(str(exc))
+    return int(m.group(1)) if m else None
+
+
 def _is_thinking_rejection(exc: BaseException) -> bool:
     return isinstance(exc, genai_errors.ClientError) and exc.code == 400 and "thinking" in str(exc).lower()
 
@@ -144,13 +154,14 @@ class LLMClient:
         self._call_logger = call_logger
         self._sleep = sleep
         self._sem = asyncio.Semaphore(cfg.llm_client.max_concurrency)
+        self.limiter = RateLimiter(cfg.llm_client.rpm_limits, redis, sleep=sleep)
         self._no_thinking: set[str] = set()
         self._warned_no_price: set[str] = set()
 
     # ---- startup check ----------------------------------------------------
 
     def configured_models(self) -> list[str]:
-        return sorted({self.cfg.models.llm_main, self.cfg.models.llm_light})
+        return sorted({self.cfg.models.llm_main, self.cfg.models.llm_light, self.cfg.models.write_model})
 
     async def check_models(self) -> list[str]:
         """Call models.list() once; fail clearly if a configured model id is unavailable."""
@@ -219,7 +230,9 @@ class LLMClient:
         cached = await self._cache_get(key)
         if cached is not None:
             parsed = schema.model_validate_json(cached) if schema is not None else None
-            result: LLMResult[Any] = LLMResult(cached, parsed, model, 0, 0, 0.0, 0, True)
+            result: LLMResult[Any] = LLMResult(
+                cached, parsed, model, 0, 0, 0.0, 0, True
+            )  # cached only if model answered
             await self._record(run_id, purpose, result)
             return result
 
@@ -228,7 +241,8 @@ class LLMClient:
             result = await self._call(prompt, model, temperature, max_output_tokens, schema, thinking_level)
             await self._record(run_id, purpose, result)
             if schema is None:
-                await self._cache_set(key, result.text)
+                if result.model == model:  # never cache a fallback's answer under the requested model
+                    await self._cache_set(key, result.text)
                 return result
             try:
                 parsed = schema.model_validate_json(result.text)
@@ -238,11 +252,12 @@ class LLMClient:
                     extra={"model": model, "purpose": purpose, "attempt": attempt + 1, "error": str(e)[:500]},
                 )
                 continue
-            await self._cache_set(key, result.text)
+            if result.model == model:
+                await self._cache_set(key, result.text)
             return LLMResult(
                 result.text,
                 parsed,
-                model,
+                result.model,
                 result.input_tokens,
                 result.output_tokens,
                 result.cost_usd,
@@ -265,6 +280,9 @@ class LLMClient:
         overloaded = 0
         while True:
             config = self._build_config(model, temperature, max_output_tokens, schema, thinking_level)
+            waited = await self.limiter.acquire(model)  # stay under the free-tier requests per minute
+            if waited > 1:
+                log.info("llm rate limit wait", extra={"model": model, "waited_s": round(waited, 1)})
             start = time.perf_counter()
             try:
                 async with self._sem:
@@ -277,6 +295,12 @@ class LLMClient:
                 overloaded += _is_overloaded(e)
                 fallback = self.cfg.models.llm_light
                 exhausted = _is_daily_quota(e)
+                if exhausted:
+                    log.warning(
+                        "llm daily quota exhausted",
+                        extra={"model": model, "quota_per_day": quota_value(e),
+                               "requests_counted_today": await self.limiter.used_today(model)},
+                    )  # fmt: skip
                 if (
                     overloaded > lc.fallback_after_503_retries or exhausted
                 ) and model == self.cfg.models.llm_main != fallback:

@@ -102,10 +102,14 @@ Format and rules:
 - Only state what the cited notes support. Do not use outside knowledge. Leave out anything the notes do not cover.
 - No sentence without a tag: no introductions, transitions, or conclusions that lack evidence.
 - Refer to papers by method or author names from the notes, not by the tags.
-- Source status matters. A claim whose only support is a source marked "preprint" (not peer-reviewed) must be
-  attributed in the sentence, e.g. "a 2022 preprint by Fukuyama reports ...", "Zhao et al. claim ...", and never
-  stated as settled fact. A single preprint cannot resolve an open problem: write that it claims a proof, not
-  that the problem is solved. Claims from peer-reviewed or landmark sources may be stated directly."""
+- Source status matters for STRONG claims. A strong claim is: a proof, theorem, or guarantee (anything stated
+  as proven, guaranteed, or provable), resolving an open problem,
+  a state-of-the-art, "best", or "first" result, or a claim about the world beyond the paper's own method (e.g.
+  a general conclusion about a field). When a strong claim's only support is a source marked "preprint", attribute
+  it in the sentence ("a 2022 preprint by Fukuyama claims a proof of ...", "Zhao et al. report state-of-the-art
+  ...") and never state it as settled fact. A single preprint cannot resolve an open problem.
+- Describing what a paper proposes, how its method works, or what it measured needs no hedge, even for preprints
+  ("TaylorShift computes attention in linear time using a Taylor softmax.")."""
 
 
 def verify_prompt(items: str) -> str:
@@ -117,9 +121,12 @@ For each sentence return {{"index": ..., "verdict": ..., "span": ..., "rewrite":
 - "supported": every claim in the sentence is stated or directly implied by its cited sources. rewrite = null.
 - "partial": part of the sentence is supported but part is not, or it overstates the sources. rewrite = the
   sentence rewritten to say only what the sources support, ending with the same source tags.
-  Also "partial": the sentence states as settled fact (e.g. "X is true", "X was proven", "X solves Y") a claim
-  whose cited sources are all marked "preprint", without attributing it. rewrite = the same claim attributed to
-  the preprint, e.g. "A 2022 preprint by <first author> claims ...", with the same source tags.
+  Also "partial": the sentence states as settled fact a STRONG claim (a proof or guarantee, i.e. anything
+  stated as proven, guaranteed, or provable; resolving an open problem; a
+  state-of-the-art / best / first result, or a claim about the world beyond the paper's own method) whose cited
+  sources are all marked "preprint", without attributing it. rewrite = the same claim attributed to the
+  preprint, e.g. "A 2022 preprint by <first author> claims ...", with the same source tags.
+  Descriptions of what a paper proposes or how its method works need no attribution: judge those normally.
   In a rewrite, copy math ($...$) exactly as written in the sentence (escape each backslash for JSON).
 - "unsupported": the sources do not support the sentence's main claim. span = null, rewrite = null.
 - "span": for supported and partial, the passage from ONE cited source that supports the sentence (for partial:

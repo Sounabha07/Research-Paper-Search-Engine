@@ -269,7 +269,7 @@ async def get_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
         "papers": paper_map,
         "consensus": [{"claim": c["claim"], "items": _j(c["items"])} for c in consensus],
         "written_by": written_by,
-        "write_fallback": bool(written_by) and written_by != get_config().models.llm_main,
+        "write_fallback": bool(written_by) and written_by != get_config().models.write_model,
         "cost_usd": run["cost_usd"],
         "input_tokens": run["input_tokens"],
         "output_tokens": run["output_tokens"],

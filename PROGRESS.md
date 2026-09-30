@@ -346,7 +346,7 @@ Models
 - The randomized-smoothing run still fell back on a 429 daily-quota error (free tier), so billing was not active for
   this key yet at 15:17 UTC.
 
-### Milestone 7 (done 2026-09-30, awaiting approval)
+### Milestone 7 (done 2026-09-30, approved)
 - Paper summaries: `GET /papers/{id}/summary` (llm_light, JSON: problem, method, datasets, results), cached in
   `paper_summaries`. Input: title + abstract + up to ~24k chars of chunks picked by section priority
   (introduction, conclusion, method, experiments), in document order. A summary made from the abstract is
@@ -376,3 +376,72 @@ Models
 - Memory: the frontend image build OOM-killed GROBID (4th kill today, 16:05 UTC). Builds were done with GROBID
   stopped (`docker compose stop grobid`, then `start`). The memory decision from before milestone 7 still stands.
 - Tests: 116 (graph assembly, shared references, summary input selection, collection BibTeX order, item validation).
+
+### Between milestones 7 and 8 (2026-09-30)
+Decisions: the canvas graph stays; the Gemini key stays on the free tier permanently (no billing).
+
+Memory
+- `.wslconfig` memory=10GB, swap=4GB: the Docker VM now sees 9.71 GiB (10,182,848 kB) + 4 GiB swap.
+- GROBID: `mem_limit: 4.5g`, `restart: unless-stopped`, still `-Xmx2560m`.
+- After the WSL restart the api and frontend ports were not forwarded to the host (curl got no response); recreating
+  the two containers fixed it.
+- 10-paper test (uncached 2025 cs.LG/CL/CV papers): 10/10 GROBID, 0 PyMuPDF fallbacks, 1 min 54 s. GROBID not
+  killed (0 restarts). Idle before: 5.53 GiB used, 4.19 GiB available, no swap. Peak: 7.88 of 9.71 GiB used
+  (1.83 GiB available), swap 0.09 GiB; GROBID 4,541 MiB, worker 1,661 MiB, postgres 1,338 MiB.
+  Note: GROBID peaked at 4,541 and (next test) 4,601 MiB, right at its 4,608 MiB limit; it was not killed, but there
+  is almost no headroom. If it gets killed during fetches, it restarts and the paper falls back to PyMuPDF.
+- Deep mode full text:
+  | question | full text of top 8 | FETCH wait | total |
+  | randomized smoothing (re-run; all 8 cached by the earlier run) | 8/8 | 0 s | 51.3 s |
+  | membership inference attacks (uncached, before the fixes below) | 4/8 | 91.0 s | 132.0 s |
+  | neural radiance fields (uncached, after fix 1) | 7/8 | 124.3 s (overran) | 152.8 s |
+  | GNN over-smoothing (uncached, after fixes 1+2) | 8/8 | 55.8 s | 82.9 s |
+  Peak VM memory in the last run: 7.28 of 9.71 GiB, GROBID 3.8 GiB, no GROBID restart.
+- Fixes found by these runs (not in the request):
+  1. A paper became `ready` (and FETCH was notified) only after its references were resolved, which holds the
+     global citation-graph lock, so papers finishing together waited on each other: chunking jobs took 25-74 s
+     though parsing and embedding were done. Now a paper is marked ready and waiters are notified right after its
+     chunks are embedded; references are resolved afterwards. A Redis set `refs:pending` keeps papers whose
+     resolution has not finished; worker startup re-enqueues them (`resolve_refs_job`).
+  2. Up to 8 resolutions waiting on that lock each held one of the worker's 6 DB connections, which stalled the
+     run's own queries (the 90 s FETCH wait ran to 124 s). Resolution now queues on an in-process lock before it
+     takes a connection.
+
+Free tier
+- WRITE model comparison (`eval/compare_write_models.py`, same notes, current prompt, current VERIFY). The flash
+  daily quota ran out after the first question, so flash's saved answers from the earlier test runs were scored for
+  the other questions (older prompt without source status); the diffusion run had been written by flash-lite
+  (fallback), so that row compares two flash-lite drafts.
+  | question | flash: kept/sentences, removed, words, papers | flash-lite: kept/sentences, removed, words, papers |
+  | attention (flash, current prompt) | 13/19, 6, 303, 7 | 16/16, 0, 359, 11 |
+  | attention (flash saved answer) | 17/19, 2, 374, 11 | |
+  | sensitivity conjecture | 12/13, 1, 242, 2 | 10/11, 1, 254, 2 |
+  | diffusion vs GANs (both flash-lite) | 15/15, 0, 365, 10 | 8/15, 7, 210, 7 |
+  | speculative decoding | 13/16, 3, 304, 11 | 11/12, 1, 241, 10 |
+  | LoRA | 12/12, 0, 235, 11 | 11/11, 0, 237, 8 |
+  Means over the 5 rows: flash 13.8 kept sentences, 304 words, 9.0 papers, 1.2 removed; flash-lite 11.2, 260, 7.6,
+  1.8. Judgment: close. Same content and structure from the same notes, both attribute the preprint proof claim;
+  flash is somewhat fuller (+2.6 sentences, +1.4 papers). flash-lite's weakness is reliability: one of 7 flash-lite
+  drafts came back with no source tags at all (everything removed) and one kept only 8 of 15 sentences.
+  Decision: `models.write_model: gemini-3.5-flash-lite` (default), flash stays selectable. WRITE now writes once more
+  when a draft is mostly untagged (fewer than half of its sentences carry a valid tag).
+- Response cache bug (found here): an answer from the fallback model was cached under the requested model and a
+  cache hit reported the requested model, so `written_by` and evaluations could label flash-lite text as flash.
+  Now only the requested model's own answers are cached, structured results report the model that answered, and the
+  cache key prefix is `llmcache:v2:` (old entries ignored).
+- Proactive rate limit (`core/ratelimit.py`): a sliding 60 s window per model in Redis, shared by the api, worker and
+  eval scripts, taken before every API request (cache hits excluded): `llm_client.rpm_limits` flash-lite 14/min,
+  flash 9/min. A per-model daily counter (Pacific-time day) is kept; a 429 daily-quota error now logs the quota value
+  from the error and the day's count. The flash-lite daily limit was not hit today (the most flash-lite calls logged
+  in a Pacific day so far: ~90 in the DB, plus uncounted eval calls).
+
+Preprint wording
+- Attribution is now required only for strong claims: proofs / theorems / guarantees ("proven", "guaranteed",
+  "provably"), resolving open problems, state-of-the-art / best / first results, and claims about the world beyond
+  the paper's own method. Describing what a paper proposes or how its method works needs no hedge (WRITE and VERIFY).
+- Span matching ignores `$` math delimiters (spans often drop them; this caused a false "no valid span").
+- Adversarial test, 3 runs: caught 11, 11, 11 of 12 (case 7, 33B/65B merged, missed every time); originals wrongly
+  removed 0, 0, 1; preprint cases rewritten with attribution 2/2, 2/2, 0/2 (the third run removed both instead).
+  Method-description originals (TaylorShift, element-wise attention) are no longer rewritten.
+- 50 real sentences: 44 supported, 3 rewritten, 3 removed (previous rule: 27 / 20 / 3). One rewrite attributes QLoRA's
+  "first method ..." to "a 2024 preprint": QLoRA has no venue in the metadata, so it counts as a preprint.

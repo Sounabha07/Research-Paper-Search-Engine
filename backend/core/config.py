@@ -49,6 +49,7 @@ class ModelsConfig(_Section):
     reranker: str
     llm_main: str
     llm_light: str
+    write_model: str  # model for WRITE: llm_main or llm_light
     write_thinking_level: str
 
 
@@ -90,6 +91,7 @@ class LLMClientConfig(_Section):
     max_concurrency: int
     retries: int
     fallback_after_503_retries: int
+    rpm_limits: dict[str, int] = {}
     backoff_base_s: float
     backoff_max_s: float
     cache_ttl_days: int

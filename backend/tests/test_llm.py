@@ -54,6 +54,17 @@ class FakeRedis:
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.data[key] = value
 
+    # rate limiter calls (always a free slot here)
+    async def eval(self, *args: Any) -> str:
+        return "0"
+
+    async def incr(self, key: str) -> int:
+        self.data[key] = str(int(self.data.get(key, "0")) + 1)
+        return int(self.data[key])
+
+    async def expire(self, key: str, seconds: int) -> None:
+        return None
+
 
 async def _no_sleep(_: float) -> None:
     return None
@@ -220,3 +231,16 @@ async def test_daily_quota_on_main_falls_back_immediately(cfg: AppConfig) -> Non
     client, _ = _client(cfg, fake)
     r = await client.generate("p", model=cfg.models.llm_main, purpose="write")
     assert r.model == cfg.models.llm_light and r.text == "light answer"
+
+
+async def test_fallback_answer_is_not_cached_under_requested_model(cfg: AppConfig) -> None:
+    quota = genai_errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+        "message": "Quota exceeded, quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier"}})  # fmt: skip
+    redis = FakeRedis()
+    fake = FakeGenai([quota, _resp("light answer"), _resp("main answer")])
+    client, _ = _client(cfg, fake, redis=redis)
+    first = await client.generate("p", model=cfg.models.llm_main, purpose="write")
+    assert first.model == cfg.models.llm_light and not first.cache_hit
+    assert not [k for k in redis.data if k.startswith("llmcache:")]  # nothing cached for the main model
+    second = await client.generate("p", model=cfg.models.llm_main, purpose="write")
+    assert second.text == "main answer" and second.model == cfg.models.llm_main  # asked again, not a stale hit

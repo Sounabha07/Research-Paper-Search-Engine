@@ -188,17 +188,30 @@ def format_notes(notes: list[prompts.Note], info: dict[str, SourceText]) -> str:
     return "\n".join(lines)
 
 
+def mostly_untagged(raw: str, allowed: set[str]) -> bool:
+    """A draft where fewer than half of the sentences carry a valid source tag (flash-lite occasionally drops
+    the tags altogether, which would make VERIFY remove the whole answer)."""
+    drafts = parse_answer(raw, allowed)
+    return not drafts or sum(d.valid for d in drafts) * 2 < len(drafts)
+
+
 async def step_write(
     st: RunState, question: str, notes: list[prompts.Note], context: str, info: dict[str, SourceText]
 ) -> tuple[str, str]:
-    """Returns (answer text, the model that wrote it; the light model after a 503/429 fallback)."""
+    """Returns (answer text, the model that wrote it; the light model after a 503/429 fallback). A draft that is
+    mostly untagged is written once more (at a different temperature, so the response cache does not repeat it)."""
     cfg = st.deps.cfg
-    notes_text = format_notes(notes, info)
-    res = await st.deps.llm.generate(
-        prompts.write_prompt(question, notes_text, context),
-        model=cfg.models.llm_main, purpose="write", run_id=st.run_id, temperature=0.3,
-        max_output_tokens=WRITE_MAX_TOKENS, thinking_level=cfg.models.write_thinking_level,
-    )  # fmt: skip
+    prompt = prompts.write_prompt(question, format_notes(notes, info), context)
+    res = None
+    for temperature in (0.3, 0.5):
+        res = await st.deps.llm.generate(
+            prompt, model=cfg.models.write_model, purpose="write", run_id=st.run_id, temperature=temperature,
+            max_output_tokens=WRITE_MAX_TOKENS, thinking_level=cfg.models.write_thinking_level,
+        )  # fmt: skip
+        if not mostly_untagged(res.text, set(info)):
+            break
+        log.warning("write draft mostly untagged, writing again", extra={"run_id": str(st.run_id)})
+    assert res is not None
     return res.text, res.model
 
 
@@ -601,7 +614,7 @@ async def _run(st: RunState) -> str:
         raw, model = await step_write(st, question, notes, context, sources)
         drafts = parse_answer(raw, set(by_id))
         await st.step("write", {"sentences": len(drafts), "untagged_or_invalid": sum(1 for d in drafts if not d.valid),
-                                "model": model, "fallback": model != cfg.models.llm_main, "raw": raw})  # fmt: skip
+                                "model": model, "fallback": model != cfg.models.write_model, "raw": raw})  # fmt: skip
     await st.check_cancel()
 
     # VERIFY || CONSENSUS (consensus runs on the draft's tagged sentences)
