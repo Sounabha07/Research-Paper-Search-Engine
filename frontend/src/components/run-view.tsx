@@ -162,6 +162,12 @@ function Answer({ run, onPin }: { run: Run; onPin?: (arxivId: string) => void })
         ))}
       </div>
       <p className="text-xs text-muted-foreground tabular-nums">
+        {run.written_by && (
+          <span className={run.write_fallback ? "text-amber-600 dark:text-amber-400" : undefined}>
+            written by {run.written_by}
+            {run.write_fallback && " (fallback: main model unavailable)"} ·{" "}
+          </span>
+        )}
         {run.removed_count} {run.removed_count === 1 ? "claim" : "claims"} removed · ${Number(run.cost_usd).toFixed(4)}
         {run.duration_s !== null && ` · ${run.duration_s.toFixed(1)} s`}
         {run.status === "timed_out" && " · timed out (answer written from the evidence gathered so far)"}

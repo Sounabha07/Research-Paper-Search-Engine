@@ -60,6 +60,8 @@ export type Run = {
   sources: Record<string, Source>;
   papers: Record<string, RunPaper>;
   consensus: { claim: string; items: { arxiv_id: string; chunk_id: number | null; stance: string }[] }[];
+  written_by: string | null;
+  write_fallback: boolean;
   cost_usd: number;
   duration_s: number | null;
 };

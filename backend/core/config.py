@@ -73,6 +73,7 @@ class AgentConfig(_Section):
     passages_for_answer: int
     max_passages_per_paper: int
     fetch_wait_s: int
+    deep_max_fetch: int
     quick_timeout_s: int
     deep_timeout_s: int
     resume_grace_s: int

@@ -47,8 +47,9 @@ agent:
   passages_for_answer: 25
   max_passages_per_paper: 3
   fetch_wait_s: 90                   # deep mode: max wait for full-text fetches
+  deep_max_fetch: 8                  # deep mode: only the top N selected papers get full text; the rest use abstracts
   quick_timeout_s: 45
-  deep_timeout_s: 120
+  deep_timeout_s: 180
   resume_grace_s: 60                 # a run resumed after a worker restart gets at least this much time left
   max_notes: 50
   verify_batch_size: 5

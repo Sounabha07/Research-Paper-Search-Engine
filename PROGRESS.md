@@ -261,7 +261,7 @@ Ranking
 - Also fixed: TEI parsing and chunking ran on the event loop and blocked the worker during deep-mode fetches
   (progress stalled; FETCH overran its 90 s wait to 111 s). They now run in threads.
 
-### Milestone 6 (done 2026-09-30, awaiting approval)
+### Milestone 6 (done 2026-09-30, approved)
 - Deep mode: REWRITE -> FIND_PAPERS -> FETCH -> CHAIN -> PASSAGES -> READ -> WRITE -> VERIFY || CONSENSUS.
   - FETCH: selected papers without full text are enqueued as urgent; the run waits on `fetch:done:{id}` up to
     fetch_wait_s (90 s), bounded by the run deadline, and streams progress. Papers still missing use their abstract.
@@ -293,3 +293,55 @@ Ranking
   - Deep runs take 120-130 s, and the answers treat preprints as settled: the sunflower answer says the conjecture
     "was proven", citing preprint 2212.13609.
   - Free-tier Gemini quota (20 flash requests per day) limits testing; quality numbers after the limit is hit are flash-lite.
+
+### Between milestones 6 and 7 (2026-09-30)
+Checks: `make lint test` green after the Docker restart (ruff, mypy, 104 tests); milestone 6 pushed (1cbee52).
+
+Docker hang = out of memory
+- Docker's VM log shows a global OOM at 11:57:17 UTC, the moment Docker stopped answering: the kernel killed GROBID's
+  java (anon RSS 3.66 GB, well above its 2.5 GB heap: off-heap memory adds ~1 GB).
+- VM memory (7.61 GiB, 2 GiB swap), sampled every ~3 s:
+  | state | used | available (min) | swap free | GROBID | worker | postgres |
+  | idle | 4.60 GiB | 3.01 GiB | 0 (swap already full) | 2.0 GiB | 1.1 GiB | 1.0 GiB |
+  | deep run (8 fetches) | 7.06 GiB | 0.55 GiB | ~0 | 3.56 GiB peak | 1.57 GiB peak | 1.0 GiB |
+  A deep run with fetches brings the VM within ~0.5 GiB of another OOM; GROBID's growth during parsing is most of it.
+  Options (not applied, need a decision): raise the WSL VM memory (host has 16 GB), lower GROBID -Xmx, or give
+  GROBID a container memory limit so a spike kills only GROBID (it restarts) instead of freezing Docker.
+
+Preprints
+- Each source's status is passed to WRITE (with first author and title on every note) and to VERIFY:
+  `source_status()` = "peer-reviewed: <venue or journal_ref>", "landmark" (optionally with venue), or "preprint (year)".
+  WRITE rule: preprint claims must be attributed and never stated as settled fact; one preprint cannot resolve an
+  open problem. VERIFY rule: a preprint claim stated as fact is "partial" and is rewritten with attribution.
+  Note: most of the corpus has no venue, so most sources are preprints and answers now attribute most claims.
+- Name check also accepts author last names and the venue from the status (so "Fukuyama claims ...", "a NeurIPS
+  paper by Hu ..." pass).
+- Additions to VERIFY found while testing (not in the request):
+  - A rewrite is checked once more and kept only if the re-check says "supported" with a valid span. Without it, a
+    wrong-paper sentence was "fixed" into another wrong claim (case 4: TaylorShift's method credited to TLinFormer).
+  - Rewrites whose $...$ math is not in the original sentence or a cited source are removed ("rewrite altered
+    math"): flash-lite garbles LaTeX in JSON rewrites ("\log" came back as `",'log`). Echoed "[c:12]" tags are stripped.
+- Adversarial test now has 12 cases (+2 preprint_as_fact: the sunflower preprint and Unigram-Watermark stated as fact).
+  Final prompt, 3 runs: caught 12, 11, 11 of 12 (#7 or #12 missed once each); originals wrongly removed 0, 0, 2;
+  preprint cases rewritten with attribution 0/2, 2/2, 1/2 (the others: removed once, missed once). flash-lite is not
+  deterministic here; the earlier variant scored 12/12 with 0 false alarms twice but removed 7 of 50 real sentences.
+- The 50 real sentences from the M5 answers: 27 supported, 20 rewritten (mostly adding preprint attribution), 3 removed.
+- Sunflower question re-run (deep): now "A 2022 preprint by Fukuyama claims that the sunflower conjecture has been
+  proven." and "A 2026 preprint by Ge claims ... proved for families of bounded VC-dimension." 4 sentences removed
+  (2 by the math guard). Known gap: "|F| > ck^4 m" (source: (ck^4)^m) passed; math is not compared exactly because
+  full-text chunks from GROBID are plain text without LaTeX.
+
+Deep mode
+- `agent.deep_max_fetch: 8` (only the top 8 selected papers are fetched; FETCH records `beyond_max_fetch`) and
+  `deep_timeout_s: 180`.
+- Uncached deep question ("How does randomized smoothing provide certified robustness against adversarial
+  examples?"): done in 133.6 s, $0.0168. FETCH: 8 requested, 2 full text within the 90 s wait (99.3 s), 6 finished
+  later; 4 more selected papers beyond the top 8 used abstracts. CHAIN added 2. Final: 14 papers, 2 full text / 12
+  abstract. PDFs downloaded in <30 s; GROBID took 6-18 s per paper, but parse jobs took ~50 s and chunking 45-70 s
+  each, with the VM out of swap and 0.55 GiB free (see above).
+
+Models
+- Every answer shows which model wrote it (`written_by`, from `llm_calls`, so it is right after a fallback or a
+  resume) and `write_fallback`; the UI marks a fallback in amber. The 503 and daily-quota 429 fallbacks stay.
+- The randomized-smoothing run still fell back on a 429 daily-quota error (free tier), so billing was not active for
+  this key yet at 15:17 UTC.

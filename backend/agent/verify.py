@@ -25,6 +25,8 @@ _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)*")
 class SourceText:
     title: str
     text: str
+    status: str = ""  # source_status(): "preprint (2022)", "peer-reviewed: <venue>", "landmark"
+    authors: str = ""  # author last names, so attributions like "Fukuyama claims ..." pass the name check
 
 
 def normalize(s: str) -> str:
@@ -45,6 +47,21 @@ def find_span(span: str | None, sources: dict[str, SourceText], tags: list[str])
     return None
 
 
+MATH = re.compile(r"\$[^$]+\$")
+
+
+def _math_key(s: str) -> str:
+    return re.sub(r"[\s{}]", "", unicodedata.normalize("NFKC", s))
+
+
+def altered_math(rewrite: str, original: str, sources: dict[str, SourceText], tags: list[str]) -> list[str]:
+    r"""Math ($...$) in a rewrite that is neither in the original sentence nor in a cited source: the verifier
+    sometimes garbles LaTeX when it rewrites (e.g. "\log" -> "\",'log")."""
+    known = {_math_key(m) for m in MATH.findall(original)}
+    haystack = _math_key(" ".join(sources[t].text for t in tags if t in sources))
+    return [m for m in MATH.findall(rewrite) if _math_key(m) not in known and _math_key(m)[1:-1] not in haystack]
+
+
 def names_in(sentence: str) -> list[str]:
     out = []
     for tok in _TOKEN.findall(sentence):
@@ -55,8 +72,14 @@ def names_in(sentence: str) -> list[str]:
 
 
 def missing_names(sentence: str, sources: dict[str, SourceText], tags: list[str]) -> list[str]:
-    """Names in the sentence that none of its cited sources (text or paper title) mention."""
-    haystack = normalize(" ".join(f"{sources[t].title} {sources[t].text}" for t in tags if t in sources)).lower()
+    """Names in the sentence that none of its cited sources mention (text, paper title, authors, or venue)."""
+    haystack = normalize(
+        " ".join(
+            f"{sources[t].title} {sources[t].authors} {sources[t].status} {sources[t].text}"
+            for t in tags
+            if t in sources
+        )
+    ).lower()
     missing = []
     for name in names_in(sentence):
         pattern = r"(?<![a-z])" + re.escape(normalize(name).lower()) + r"(?![a-z])"

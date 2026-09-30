@@ -57,3 +57,17 @@ cases:
     sources: ["a:2510.23123"]
     original: "In standard LoRA, all input tokens share the same weights and undergo an identical input-output projection."
     altered: "In standard LoRA, all input tokens share the same weights and undergo an identical input-output projection, which makes LoRA underperform full fine-tuning on every benchmark."
+  # Preprint claims stated as settled fact. Expected: VERIFY returns partial and rewrites the sentence with
+  # attribution to the preprint (the original, attributed sentence must pass).
+  - id: 11
+    type: preprint_as_fact
+    expect: partial
+    sources: ["a:2212.13609"]
+    original: "A 2022 preprint by Fukuyama claims to prove the sunflower conjecture, showing that a family of sets of cardinality at most m includes a k-sunflower if its size exceeds (ck^4)^m."
+    altered: "The sunflower conjecture is true: a family of sets of cardinality at most m includes a k-sunflower if its size exceeds (ck^4)^m."
+  - id: 12
+    type: preprint_as_fact
+    expect: partial
+    sources: ["a:2306.17439"]
+    original: "Zhao et al. claim to prove that their Unigram-Watermark is robust against text editing and paraphrasing."
+    altered: "Unigram-Watermark is guaranteed to be robust against text editing and paraphrasing."

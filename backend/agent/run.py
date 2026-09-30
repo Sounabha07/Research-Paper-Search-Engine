@@ -27,7 +27,7 @@ from redis.asyncio import Redis
 from agent import prompts
 from agent.text import DraftSentence, number_citations, parse_answer, source_id, strip_tags
 from agent.threads import answer_markdown, citation_numbers, conversation_context, thread_cited
-from agent.verify import SourceText, find_span, missing_names
+from agent.verify import SourceText, altered_math, find_span, missing_names
 from core.config import AppConfig
 from core.embeddings import abstract_text
 from core.fetchq import enqueue_fulltext
@@ -178,15 +178,28 @@ async def step_read(
     return notes
 
 
-async def step_write(st: RunState, question: str, notes: list[prompts.Note], context: str) -> str:
+def format_notes(notes: list[prompts.Note], info: dict[str, SourceText]) -> str:
+    """WRITE input: each note with its source's first author, status (preprint / venue / landmark) and title."""
+    lines = []
+    for n in notes:
+        s = info.get(n.source_id)
+        about = f' ({s.authors.split(", ")[0] or "unknown author"}; {s.status}; "{s.title[:90]}")' if s else ""
+        lines.append(f"- [[{n.source_id}]]{about} {n.claim}")
+    return "\n".join(lines)
+
+
+async def step_write(
+    st: RunState, question: str, notes: list[prompts.Note], context: str, info: dict[str, SourceText]
+) -> tuple[str, str]:
+    """Returns (answer text, the model that wrote it; the light model after a 503/429 fallback)."""
     cfg = st.deps.cfg
-    notes_text = "\n".join(f"- [[{n.source_id}]] {n.claim}" for n in notes)
+    notes_text = format_notes(notes, info)
     res = await st.deps.llm.generate(
         prompts.write_prompt(question, notes_text, context),
         model=cfg.models.llm_main, purpose="write", run_id=st.run_id, temperature=0.3,
         max_output_tokens=WRITE_MAX_TOKENS, thinking_level=cfg.models.write_thinking_level,
     )  # fmt: skip
-    return res.text
+    return res.text, res.model
 
 
 async def verify_sentences(
@@ -198,7 +211,8 @@ async def verify_sentences(
     require_span: bool = True,
     name_check: bool = True,
 ) -> list[Final]:
-    """Spec 12 VERIFY: batches of verify_batch_size; partial -> rewrite once; unsupported -> removed.
+    """Spec 12 VERIFY: batches of verify_batch_size; partial -> rewrite once (the rewrite is re-checked and
+    removed unless supported); unsupported -> removed.
 
     With require_span, a supported/partial verdict also needs an exact supporting excerpt from a cited
     source (agent/verify.py), else the sentence is removed. With name_check, names in the sentence must
@@ -216,7 +230,8 @@ async def verify_sentences(
     async def check(batch: list[tuple[int, DraftSentence]]) -> list[Final]:
         items = []
         for k, (_, d) in enumerate(batch):
-            cited = "\n".join(f"  [{t}] {sources[t].text if t in sources else ''}" for t in d.tags)
+            cited = "\n".join(f"  [{t}]{_source_label(sources.get(t))} {sources[t].text if t in sources else ''}"
+                              for t in d.tags)  # fmt: skip
             items.append(f"Sentence {k}: {d.with_tags()}\nSources cited by sentence {k}:\n{cited}")
         res = await llm.generate(
             prompts.verify_prompt("\n\n".join(items)),
@@ -233,8 +248,60 @@ async def verify_sentences(
     batches = [to_check[k : k + n] for k in range(0, len(to_check), n)]
     for result in await asyncio.gather(*(check(b) for b in batches)):
         finals += result
+
+    # A rewrite is checked once more (not rewritten again): it is kept only if it is now "supported" with a
+    # valid span, so a rewrite cannot carry an unsupported detail over from the original sentence.
+    rewritten = [f for f in finals if f.verdict == "partial_rewritten"] if require_span else []
+    if rewritten:
+        again = [(f.seq, DraftSentence(f.section, strip_tags(f.text), list(f.tags))) for f in rewritten]
+        rechecks = await asyncio.gather(*(check(again[k : k + n]) for k in range(0, len(again), n)))
+        by_seq = {r.seq: r for batch in rechecks for r in batch}
+        for k, f in enumerate(finals):
+            r = by_seq.get(f.seq)
+            if f.verdict == "partial_rewritten" and (r is None or r.verdict != "supported"):
+                finals[k] = Final(f.seq, f.section, f.text, "unsupported_removed", f.tags, "rewrite not supported")
     finals.sort(key=lambda f: f.seq)
     return finals
+
+
+def _source_label(s: SourceText | None) -> str:
+    return f" (status: {s.status}; first author: {s.authors.split(', ')[0]})" if s and s.status else ""
+
+
+def source_status(is_landmark: bool, venue_accepted: bool, venue_name: str | None, journal_ref: str | None,
+                  year: int | None) -> str:  # fmt: skip
+    """How settled a source's claims are, for WRITE and VERIFY."""
+    if venue_accepted or journal_ref:
+        reviewed = f"peer-reviewed: {venue_name or journal_ref}"
+        return f"landmark, {reviewed}" if is_landmark else reviewed
+    if is_landmark:
+        return "landmark"
+    return f"preprint ({year})" if year else "preprint"
+
+
+async def source_texts(
+    pool: asyncpg.Pool, by_id: dict[str, Passage], titles: dict[str, tuple[str, int | None]]
+) -> dict[str, SourceText]:
+    """Source id -> text (abstracts prefixed with the title), paper title, status, and author last names."""
+    rows = await pool.fetch(
+        "SELECT arxiv_id, is_landmark, venue_accepted, venue_name, journal_ref,"
+        " extract(year FROM v1_date)::int AS year, authors FROM papers WHERE arxiv_id = ANY($1)",
+        list({p.arxiv_id for p in by_id.values()}),
+    )
+    meta = {r["arxiv_id"]: (source_status(r["is_landmark"], r["venue_accepted"], r["venue_name"], r["journal_ref"],
+                                          r["year"]), author_names(r["authors"])) for r in rows}  # fmt: skip
+    out = {}
+    for sid, p in by_id.items():
+        title = titles.get(p.arxiv_id, ("", None))[0]
+        status, authors = meta.get(p.arxiv_id, ("", ""))
+        text = f"{title}. {p.text}" if p.source == "abstract" else p.text
+        out[sid] = SourceText(title=title, text=text, status=status, authors=authors)
+    return out
+
+
+def author_names(authors: Any, limit: int = 6) -> str:
+    items = json.loads(authors) if isinstance(authors, str) else authors or []
+    return ", ".join(a["last"] for a in items[:limit] if a.get("last"))
 
 
 def _apply_verdict(
@@ -247,6 +314,8 @@ def _apply_verdict(
         return Final(i, d.section, d.with_tags(), "unsupported_removed", d.tags, v.verdict)
     text = d.with_tags() if v.verdict == "supported" else _rewrite(v.rewrite or "", d)
     verdict = "supported" if v.verdict == "supported" else "partial_rewritten"
+    if verdict == "partial_rewritten" and altered_math(strip_tags(text), d.text, sources, d.tags):
+        return Final(i, d.section, text, "unsupported_removed", d.tags, "rewrite altered math")
     span_source = find_span(v.span, sources, d.tags)
     if require_span and span_source is None:
         return Final(i, d.section, text, "unsupported_removed", d.tags, "no valid span")
@@ -273,9 +342,12 @@ async def step_verify(st: RunState, drafts: list[DraftSentence], sources: dict[s
     return finals
 
 
+LOOSE_TAG = re.compile(r"\s*\[\s*[ca]\s*:\s*[^\]\s]+\s*\]")
+
+
 def _rewrite(rewrite: str, original: DraftSentence) -> str:
     """Keep the rewrite's wording, but only the original sentence's tags (no second verify loop)."""
-    text = strip_tags(rewrite)
+    text = " ".join(LOOSE_TAG.sub("", strip_tags(rewrite)).split())  # the verifier sometimes echoes "[c:12]"
     return text + " " + "".join(f"[[{t}]]" for t in original.tags)
 
 
@@ -299,11 +371,15 @@ async def step_consensus(
 
 async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
     """Spec 12 FETCH: queue selected papers without full text (urgent, rank order) and wait for them up to
-    fetch_wait_s (bounded by the run deadline), streaming progress. Papers still missing use their abstract."""
+    fetch_wait_s (bounded by the run deadline), streaming progress. Papers still missing use their abstract.
+    Only the top deep_max_fetch selected papers are fetched; the rest use their abstract (or cached full text)."""
     deps, cfg = st.deps, st.deps.cfg
-    targets = [h.arxiv_id for h in hits if h.state != "ready"]
+    top = hits[: cfg.agent.deep_max_fetch]
+    targets = [h.arxiv_id for h in top if h.state != "ready"]
+    not_fetched = sum(1 for h in hits[cfg.agent.deep_max_fetch :] if h.state != "ready")
     if not targets:
-        await st.step("fetch", {"requested": 0, "ready": 0, "abstract_only": 0, "still_missing": [], "waited_s": 0})
+        await st.step("fetch", {"requested": 0, "ready": 0, "abstract_only": 0, "still_missing": [], "waited_s": 0,
+                                "beyond_max_fetch": not_fetched})  # fmt: skip
         return
     started = time.monotonic()
     pubsub = deps.redis.pubsub()
@@ -352,6 +428,7 @@ async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
         "abstract_only": sum(1 for s in finished.values() if s != "ready"),
         "still_missing": pending,
         "waited_s": round(time.monotonic() - started, 1),
+        "beyond_max_fetch": not_fetched,
     })  # fmt: skip
 
 
@@ -516,24 +593,18 @@ async def _run(st: RunState) -> str:
 
     # WRITE
     by_id = {_passage_id(p): p for p in passages}
+    sources = await source_texts(deps.pool, by_id, titles)
     if "write" in st.done and "raw" in st.done["write"]:
         raw = st.done["write"]["raw"]
         drafts = parse_answer(raw, set(by_id))
     else:
-        raw = await step_write(st, question, notes, context)
+        raw, model = await step_write(st, question, notes, context, sources)
         drafts = parse_answer(raw, set(by_id))
         await st.step("write", {"sentences": len(drafts), "untagged_or_invalid": sum(1 for d in drafts if not d.valid),
-                                "raw": raw})  # fmt: skip
+                                "model": model, "fallback": model != cfg.models.llm_main, "raw": raw})  # fmt: skip
     await st.check_cancel()
 
     # VERIFY || CONSENSUS (consensus runs on the draft's tagged sentences)
-    source_texts = {
-        sid: SourceText(
-            title=titles.get(p.arxiv_id, ("", None))[0],
-            text=f"{titles.get(p.arxiv_id, ('', None))[0]}. {p.text}" if p.source == "abstract" else p.text,
-        )
-        for sid, p in by_id.items()
-    }
     draft_text = " ".join(d.text for d in drafts if d.valid)
 
     async def consensus() -> list[prompts.ConsensusClaim]:
@@ -541,7 +612,7 @@ async def _run(st: RunState) -> str:
             return []
         return await step_consensus(st, draft_text, passages, titles)
 
-    finals, claims = await asyncio.gather(step_verify(st, drafts, source_texts), consensus())
+    finals, claims = await asyncio.gather(step_verify(st, drafts, sources), consensus())
     await _store(st, finals, by_id, notes, claims)
     return "timed_out" if st.timed_out else "done"
 

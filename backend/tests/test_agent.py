@@ -8,7 +8,8 @@ import pytest
 
 from agent import prompts
 from agent.bibtex import bibtex
-from agent.run import RunState, clean_summary, step_read, step_verify
+from agent.prompts import Note
+from agent.run import RunState, author_names, clean_summary, format_notes, source_status, step_read, step_verify
 from agent.text import DraftSentence, number_citations, parse_answer, render_with_numbers, strip_tags
 from agent.verify import SourceText, find_span, missing_names, names_in
 from core.config import AppConfig
@@ -125,7 +126,12 @@ async def test_verify_applies_verdicts_and_spans(cfg: AppConfig) -> None:
         prompts.Verdict(index=4, verdict="supported", span="Alpha is the best method"),  # not in the source
         prompts.Verdict(index=5, verdict="supported", span="QLoRA fine-tunes a 65B model"),  # names not in source
     ])  # fmt: skip
-    llm = FakeLLM({"verify": verdicts})
+    recheck = prompts.VerifyOut(results=[
+        prompts.Verdict(index=0, verdict="supported", span="fine-tunes a 65B model on a single 48GB GPU")
+    ])  # fmt: skip
+    llm = FakeLLM(
+        {"verify": lambda p: recheck if "Sentence 0: QLoRA fits a 65B model on a single 48GB" in p else verdicts}
+    )
     st = _state(cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"verify_batch_size": 10})}), llm)
     finals = await step_verify(st, drafts, SOURCES)
     got = [(f.seq, f.verdict, f.text, f.reason) for f in finals]
@@ -141,8 +147,20 @@ async def test_verify_applies_verdicts_and_spans(cfg: AppConfig) -> None:
          "names not in source: TLinFormer"),
     ]  # fmt: skip
     assert finals[0].span_source == "c:1" and finals[1].span_source == "c:2"
-    assert len(llm.calls) == 1  # untagged sentences are not sent to the verifier
+    assert len(llm.calls) == 2  # one batch + the re-check of the rewrite; untagged sentences are not sent
     assert "single 48GB GPU" in llm.calls[0][1]
+
+
+async def test_rewrite_that_fails_recheck_is_removed(cfg: AppConfig) -> None:
+    drafts = [DraftSentence("S", "QLoRA fits a 65B model on a laptop GPU.", ["c:2"])]
+    first = prompts.VerifyOut(results=[prompts.Verdict(
+        index=0, verdict="partial", span="fine-tunes a 65B model on a single 48GB GPU",
+        rewrite="QLoRA fits a 65B model on a single 48GB GPU in one hour.",
+    )])  # fmt: skip
+    second = prompts.VerifyOut(results=[prompts.Verdict(index=0, verdict="partial", rewrite="x")])
+    llm = FakeLLM({"verify": lambda p: second if "in one hour" in p else first})
+    finals = await step_verify(_state(cfg, llm), drafts, SOURCES)
+    assert [(f.verdict, f.reason) for f in finals] == [("unsupported_removed", "rewrite not supported")]
 
 
 def test_span_and_name_checks() -> None:
@@ -185,3 +203,56 @@ def test_rewrite_prompt_mentions_limit(n: int) -> None:
 def test_clean_summary() -> None:
     assert clean_summary("**Updated Summary:**\n\nThe thread covers LoRA [1].") == "The thread covers LoRA [1]."
     assert clean_summary("Summary: LoRA [1].") == "Summary: LoRA [1]."  # content on the same line is kept
+
+
+def test_source_status() -> None:
+    assert source_status(False, False, None, None, 2022) == "preprint (2022)"
+    assert source_status(False, True, "NeurIPS 2023", None, 2023) == "peer-reviewed: NeurIPS 2023"
+    assert (
+        source_status(False, False, None, "Ann. of Math. 193 (2021)", 2020) == "peer-reviewed: Ann. of Math. 193 (2021)"
+    )
+    assert source_status(True, False, None, None, 2017) == "landmark"
+    assert source_status(True, True, "NeurIPS", None, 2017) == "landmark, peer-reviewed: NeurIPS"
+
+
+def test_format_notes_carry_status_and_author() -> None:
+    info = {"a:2212.13609": SourceText("The Sunflower Conjecture Proven", "...", "preprint (2022)", "Fukuyama")}
+    notes = [Note(claim="The conjecture holds.", source_id="a:2212.13609"), Note(claim="x", source_id="c:9")]
+    text = format_notes(notes, info)
+    assert (
+        '- [[a:2212.13609]] (Fukuyama; preprint (2022); "The Sunflower Conjecture Proven") The conjecture holds.'
+        in text
+    )
+    assert "- [[c:9]] x" in text
+
+
+def test_author_names_and_attribution_pass_name_check() -> None:
+    assert author_names('[{"first": "J", "last": "McDonald"}, {"first": "A", "last": "Lee"}]') == "McDonald, Lee"
+    sources = {"c:1": SourceText("Some Paper", "The method is robust to paraphrasing.", "preprint (2023)", "McDonald")}
+    assert missing_names("McDonald et al. claim the method is robust to paraphrasing.", sources, ["c:1"]) == []
+
+
+def test_venue_from_status_passes_name_check() -> None:
+    sources = {"c:1": SourceText("Some Paper", "The method is fast.", "peer-reviewed: NeurIPS 2025", "Hu")}
+    assert missing_names("A NeurIPS 2025 paper by Hu reports the method is fast.", sources, ["c:1"]) == []
+
+
+def test_rewrite_drops_echoed_single_bracket_tags() -> None:
+    from agent.run import _rewrite
+
+    d = DraftSentence("S", "x", ["a:2508.20407"])
+    assert (
+        _rewrite("A preprint claims y. [a:2508.20407] [[a:2508.20407]]", d) == "A preprint claims y. [[a:2508.20407]]"
+    )
+
+
+def test_altered_math_in_rewrite() -> None:
+    from agent.verify import altered_math
+
+    sources = {"a:1": SourceText("T", "a family includes a $k$-sunflower if $|F| > ( c k^4 )^{m}$")}
+    original = r"A family of $O(w^3 \log k)^k$ sets contains a sunflower."
+    assert altered_math(r"A preprint claims a family of $O(w^3 \log k)^k$ sets does.", original, sources, ["a:1"]) == []
+    assert altered_math("It needs $|F| > (ck^4)^m$.", original, sources, ["a:1"]) == []  # in the source
+    assert altered_math("A family of $O(w^3 \",'log k)^k$ sets.", original, sources, ["a:1"]) == [
+        "$O(w^3 \",'log k)^k$"
+    ]

@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 from collections import Counter
+from dataclasses import replace
 
 from agent.run import verify_sentences
 from agent.text import DraftSentence, strip_tags
@@ -21,12 +22,14 @@ from core.config import get_config
 from core.db import raw_connection
 from core.llm import LLMClient
 from core.logging import setup_logging
+from verifier_adversarial import paper_meta  # same directory
 
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("threads", nargs="+")
     parser.add_argument("--no-names", action="store_true")
+    parser.add_argument("--no-status", action="store_true")
     args = parser.parse_args()
     setup_logging("WARNING")
     cfg = get_config()
@@ -57,12 +60,17 @@ async def main() -> None:
         }
     finally:
         await conn.close()
+    if not args.no_status:  # the pipeline passes each source's status (preprint / venue / landmark) to VERIFY
+        meta = await paper_meta(set(sources))
+        sources = {k: replace(v, status=meta[k][0], authors=meta[k][1]) if k in meta else v for k, v in sources.items()}
     finals = await verify_sentences(LLMClient(cfg), cfg, drafts, sources, None, True, not args.no_names)
     verdicts = Counter(f.verdict for f in finals)
     print(f"{len(finals)} previously kept sentences -> {dict(verdicts)}")
     for f in finals:
         if f.verdict == "unsupported_removed":
             print(f"  removed ({f.reason}): {strip_tags(f.text)[:160]}")
+        elif f.verdict == "partial_rewritten":
+            print(f"  rewritten: {strip_tags(f.text)[:200]}")
 
 
 if __name__ == "__main__":

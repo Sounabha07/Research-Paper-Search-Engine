@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from agent.bibtex import bibtex
 from agent.run import cancel_key
 from agent.threads import citation_numbers
+from core.config import get_config
 from core.redis import get_redis, run_channel
 
 router = APIRouter(tags=["threads"])
@@ -169,6 +170,9 @@ async def get_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
             "SELECT seq, section, text, verdict, sources FROM answer_sentences WHERE run_id = $1 ORDER BY seq", run_id
         )
         consensus = await conn.fetch("SELECT claim, items FROM consensus WHERE run_id = $1 ORDER BY id", run_id)
+        written_by = await conn.fetchval(
+            "SELECT model FROM llm_calls WHERE run_id = $1 AND purpose = 'write' ORDER BY id DESC LIMIT 1", run_id
+        )
         numbers = await citation_numbers(conn, run["thread_id"])
         cited_sources: dict[str, dict[str, Any]] = {}
         sections_used: dict[str, set[str]] = {}
@@ -263,6 +267,8 @@ async def get_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
         "sources": sources,
         "papers": paper_map,
         "consensus": [{"claim": c["claim"], "items": _j(c["items"])} for c in consensus],
+        "written_by": written_by,
+        "write_fallback": bool(written_by) and written_by != get_config().models.llm_main,
         "cost_usd": run["cost_usd"],
         "input_tokens": run["input_tokens"],
         "output_tokens": run["output_tokens"],
