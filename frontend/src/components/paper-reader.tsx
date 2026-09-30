@@ -3,7 +3,10 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { AddToCollection } from "@/components/add-to-collection";
 import { Badges } from "@/components/badges";
+import { CitationGraph } from "@/components/citation-graph";
+import { CitedByList, ReferenceList, SummaryCard, Tabs, useReferences } from "@/components/paper-explore";
 import { authorLine, type Author } from "@/lib/api-types";
 
 type Paper = {
@@ -80,6 +83,8 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
   const router = useRouter();
   const [ask, setAsk] = useState("");
   const [asking, setAsking] = useState(false);
+  const [tab, setTab] = useState<"text" | "refs" | "citedby" | "graph">("text");
+  const refs = useReferences(arxivId);
 
   useEffect(() => {
     Promise.all([
@@ -138,8 +143,13 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
             PDF
           </a>
         </p>
-        <Badges badges={paper.badges} />
+        <div className="flex items-start justify-between gap-3">
+          <Badges badges={paper.badges} />
+          <AddToCollection arxivId={arxivId} />
+        </div>
       </header>
+
+      <SummaryCard arxivId={arxivId} />
 
       <form onSubmit={askAboutPaper} className="flex gap-2">
         <input
@@ -178,7 +188,24 @@ export function PaperReader({ arxivId }: { arxivId: string }) {
         )}
       </section>
 
-      {content?.full_text && (
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "text", label: content?.full_text ? "Full text" : "Full text (not fetched)" },
+          { id: "refs", label: `References${refs ? ` (${refs.references.length})` : ""}` },
+          { id: "citedby", label: `Cited by${refs ? ` (${refs.cited_by.length})` : ""}` },
+          { id: "graph", label: "Citation graph" },
+        ]}
+      />
+      {tab === "refs" && refs && <ReferenceList refs={refs.references} />}
+      {tab === "citedby" && refs && <CitedByList items={refs.cited_by} />}
+      {tab === "graph" && <CitationGraph url={`/api/papers/${arxivId}/graph?hops=1`} />}
+      {tab === "text" && !content?.full_text && (
+        <p className="text-sm text-muted-foreground">Only the abstract is available. Use “Get full text” above.</p>
+      )}
+
+      {tab === "text" && content?.full_text && (
         <section className="flex flex-col gap-3 text-[15px] leading-relaxed">
           {blocks(cps, content).map((b) =>
             b.heading ? (

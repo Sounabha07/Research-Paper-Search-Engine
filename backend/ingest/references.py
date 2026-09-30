@@ -282,9 +282,10 @@ async def refresh_counts(conn: asyncpg.Connection, cited_ids: set[str]) -> None:
     stubs = [int(c.removeprefix("stub:")) for c in cited_ids if c.startswith("stub:")]
     if papers:
         await conn.execute(
-            "UPDATE papers p SET fulltext_citations ="
-            " (SELECT count(*) FROM citation_edges e WHERE e.cited_id = p.arxiv_id)"
-            " WHERE p.arxiv_id = ANY($1::text[])",
+            "UPDATE papers p SET fulltext_citations = c.n,"
+            " badges = p.badges || jsonb_build_object('fulltext_citations', c.n)"  # the badge copy stays in step
+            " FROM (SELECT a AS arxiv_id, (SELECT count(*) FROM citation_edges e WHERE e.cited_id = a) AS n"
+            " FROM unnest($1::text[]) a) c WHERE p.arxiv_id = c.arxiv_id",
             papers,
         )
     if stubs:

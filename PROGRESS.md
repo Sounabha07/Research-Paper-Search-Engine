@@ -8,7 +8,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - [x] 4. **Search**: hybrid retrieval, rerank, `/search` endpoint, basic search UI returning papers and passages.
 - [x] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
 - [x] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
-- [ ] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
+- [x] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
 - [ ] 8. **Feeds, nightly jobs, eval, README**: digests, OAI-PMH nightly, eval suite with ablations, README with architecture diagram, setup, and eval results table (leave a placeholder for the demo video).
 
 ## Notes
@@ -345,3 +345,34 @@ Models
   resume) and `write_fallback`; the UI marks a fallback in amber. The 503 and daily-quota 429 fallbacks stay.
 - The randomized-smoothing run still fell back on a 429 daily-quota error (free tier), so billing was not active for
   this key yet at 15:17 UTC.
+
+### Milestone 7 (done 2026-09-30, awaiting approval)
+- Paper summaries: `GET /papers/{id}/summary` (llm_light, JSON: problem, method, datasets, results), cached in
+  `paper_summaries`. Input: title + abstract + up to ~24k chars of chunks picked by section priority
+  (introduction, conclusion, method, experiments), in document order. A summary made from the abstract is
+  regenerated once the paper has full text; `?refresh=true` forces it. 6 summaries: 5.3-7.5 s, ~4.4k input /
+  ~240 output tokens, ~$0.0019 each; cached: 0.65 s. Known issue: flash-lite still lists models (RoBERTa, GPT-3)
+  under "datasets" despite the prompt saying not to.
+- Citation graph: `GET /papers/{id}/graph?hops=1|2` (references and cited-by, stubs included and never expanded,
+  40 neighbors per node and direction, highest-cited first, 200 nodes max) and `GET /runs/{id}/graph` (the run's
+  papers, citations among them, and up to 15 references shared by two or more of them). LoRA: 47 nodes, 91 edges
+  in 0.4 s. UI: canvas force layout, node size = in-corpus citations, color = year (stubs gray), ring = this
+  paper / papers used for the answer, hover tooltip, click = select + expand (references and citing papers), legend
+  says citations are counted within this corpus. Deviation from the spec: `react-force-graph-2d` could not be added.
+  The npm registry kept failing on `next`'s metadata (pnpm 12 re-verifies the whole lockfile on `pnpm add`; 4
+  attempts), so the graph uses a small built-in layout (`components/citation-graph.tsx`), which is enough for a few
+  hundred nodes. No new dependencies.
+- `GET /papers/{id}/references`: parsed bibliography with resolution (in-corpus links) and in-corpus citers.
+- Paper page: summary card, Save to collection, tabs Full text / References (n) / Cited by (n) / Citation graph.
+- Runs: tabs Answer / Citation graph; consensus bars under the answer (per central claim: papers supporting,
+  contradicting, unrelated; a paper counts as contradicting if any of its passages does); Save to collection.
+- Collections: `GET/POST /collections`, `GET/PATCH/DELETE /collections/{id}`, `POST /collections/{id}/items`
+  (paper or run, duplicates ignored), `DELETE /collections/{id}/items/{item_id}`, `GET /collections/{id}/bibtex`
+  (saved papers, then every paper cited by saved answers, deduplicated). `GET /collections?arxiv_id=|run_id=` marks
+  collections that already hold the item. Pages `/collections` and `/collections/[id]` (rename, describe, remove,
+  delete, export). Nav link added. Test collection "Certified robustness" (1 answer + 1 paper -> 7 BibTeX entries).
+- Fix: the `fulltext_citations` badge was only refreshed by `make score`, so 1,380 papers showed stale counts (LoRA:
+  badge 3, actual 6). `refresh_counts` now updates the badge with the column; existing rows backfilled.
+- Memory: the frontend image build OOM-killed GROBID (4th kill today, 16:05 UTC). Builds were done with GROBID
+  stopped (`docker compose stop grobid`, then `start`). The memory decision from before milestone 7 still stands.
+- Tests: 116 (graph assembly, shared references, summary input selection, collection BibTeX order, item validation).

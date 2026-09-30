@@ -19,6 +19,7 @@ from agent.run import cancel_key
 from agent.threads import citation_numbers
 from core.config import get_config
 from core.redis import get_redis, run_channel
+from retrieval.graph import set_graph
 
 router = APIRouter(tags=["threads"])
 
@@ -276,6 +277,16 @@ async def get_run(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
         "finished_at": finished,
         "duration_s": (finished - started).total_seconds() if finished and started else None,
     }
+
+
+@router.get("/runs/{run_id}/graph")
+async def run_graph(run_id: uuid.UUID, request: Request) -> dict[str, Any]:
+    """Citation graph of the papers a run selected: citations among them and references shared by two or more."""
+    pool = _pool(request)
+    selected = await pool.fetchval("SELECT selected_papers FROM research_runs WHERE id = $1", run_id)
+    if selected is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return await set_graph(pool, [p["arxiv_id"] for p in _j(selected) or []])
 
 
 @router.get("/threads/{thread_id}/bibtex")

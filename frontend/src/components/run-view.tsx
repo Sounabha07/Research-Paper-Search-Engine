@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AddToCollection } from "@/components/add-to-collection";
 import { Badges } from "@/components/badges";
+import { CitationGraph } from "@/components/citation-graph";
+import { Tabs } from "@/components/paper-explore";
 import { ACTIVE, authorLine, type Run, type Sentence, type Source, stripTags } from "@/lib/api-types";
 
 const POLL_MS = 1000;
@@ -129,6 +132,53 @@ function SentenceView({ s, run }: { s: Sentence; run: Run }) {
   );
 }
 
+const STANCES = [
+  { id: "supports", label: "support", color: "bg-emerald-500" },
+  { id: "contradicts", label: "contradict", color: "bg-rose-500" },
+  { id: "unrelated", label: "unrelated", color: "bg-muted-foreground/30" },
+] as const;
+
+/** Consensus (spec 12, 15): for each central claim, how many of the run's papers support or contradict it. A paper
+ * counts as contradicting if any of its passages does, else supporting if any does. */
+function Consensus({ run }: { run: Run }) {
+  if (!run.consensus.length) return null;
+  const titles = new Map(run.selected_papers.map((p) => [p.arxiv_id, p.title]));
+  const label = (a: string) => (run.papers[a]?.number ? `[${run.papers[a].number}]` : (titles.get(a) ?? a));
+  return (
+    <section className="flex flex-col gap-3">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Consensus on central claims</h4>
+      {run.consensus.map((c, i) => {
+        const byPaper = new Map<string, string>();
+        for (const it of c.items) {
+          const prev = byPaper.get(it.arxiv_id);
+          if (prev === "contradicts" || (prev === "supports" && it.stance === "unrelated")) continue;
+          byPaper.set(it.arxiv_id, it.stance);
+        }
+        const groups = STANCES.map((st) => ({ ...st, papers: [...byPaper].filter(([, v]) => v === st.id).map(([a]) => a) }));
+        const total = byPaper.size || 1;
+        return (
+          <div key={i} className="flex flex-col gap-1 text-sm">
+            <p>{c.claim}</p>
+            <div className="flex h-2 w-full overflow-hidden rounded bg-muted" aria-hidden>
+              {groups.map((g) => (
+                <div key={g.id} className={g.color} style={{ width: `${(100 * g.papers.length) / total}%` }} />
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {groups
+                .filter((g) => g.papers.length && g.id !== "unrelated")
+                .map((g) => `${g.papers.length} ${g.papers.length === 1 ? "paper" : "papers"} ${g.label}${g.papers.length === 1 ? "s" : ""}: ${g.papers.map(label).join(" ")}`)
+                .join(" · ") || "no paper takes a position"}
+              {groups[2].papers.length > 0 && ` · ${groups[2].papers.length} unrelated`}
+            </p>
+          </div>
+        );
+      })}
+      <p className="text-xs text-muted-foreground">Stances are classified automatically (light model) from the passages used for this answer.</p>
+    </section>
+  );
+}
+
 function Answer({ run, onPin }: { run: Run; onPin?: (arxivId: string) => void }) {
   const kept = run.sentences.filter((s) => s.verdict !== "unsupported_removed");
   const removed = run.sentences.filter((s) => s.verdict === "unsupported_removed");
@@ -161,6 +211,7 @@ function Answer({ run, onPin }: { run: Run; onPin?: (arxivId: string) => void })
           </div>
         ))}
       </div>
+      <Consensus run={run} />
       <p className="text-xs text-muted-foreground tabular-nums">
         {run.written_by && (
           <span className={run.write_fallback ? "text-amber-600 dark:text-amber-400" : undefined}>
@@ -332,10 +383,23 @@ export function RunView({ runId, onSettled, onPin }: {
           ) : run.status === "cancelled" ? (
             <p className="text-sm text-muted-foreground">Cancelled.</p>
           ) : (
-            <Answer run={run} onPin={onPin} />
+            <AnswerTabs run={run} onPin={onPin} />
           )}
         </div>
       </div>
     </article>
+  );
+}
+
+function AnswerTabs({ run, onPin }: { run: Run; onPin?: (arxivId: string) => void }) {
+  const [tab, setTab] = useState<"answer" | "graph">("answer");
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-end justify-between gap-2">
+        <Tabs value={tab} onChange={setTab} tabs={[{ id: "answer", label: "Answer" }, { id: "graph", label: "Citation graph" }]} />
+        <AddToCollection runId={run.id} />
+      </div>
+      {tab === "answer" ? <Answer run={run} onPin={onPin} /> : <CitationGraph url={`/api/runs/${run.id}/graph`} />}
+    </div>
   );
 }
