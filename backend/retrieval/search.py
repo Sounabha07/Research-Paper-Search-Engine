@@ -38,11 +38,17 @@ if TYPE_CHECKING:
 class SearchModels:
     """Embedder + reranker. Inference runs in a thread, one call at a time (single GPU)."""
 
-    def __init__(self, embedder: SentenceTransformer, reranker: CrossEncoder, cfg: AppConfig) -> None:
+    def __init__(
+        self,
+        embedder: SentenceTransformer,
+        reranker: CrossEncoder,
+        cfg: AppConfig,
+        lock: asyncio.Lock | None = None,  # share with other GPU users in the same process
+    ) -> None:
         self.embedder = embedder
         self.reranker = reranker
         self.cfg = cfg
-        self._lock = asyncio.Lock()
+        self._lock = lock or asyncio.Lock()
 
     @property
     def reranker_device(self) -> str:
@@ -388,3 +394,34 @@ async def search(
 
 def _json(value: Any) -> Any:
     return orjson.loads(value) if isinstance(value, str | bytes) else value
+
+
+def author_names(authors: list[dict[str, str]]) -> list[str]:
+    return [" ".join(x for x in (a.get("first", ""), a.get("last", "")) if x) for a in authors]
+
+
+def result_to_api(result: SearchResult) -> dict[str, Any]:
+    """Plain-dict form of a SearchResult (the /search response; also crosses the arq queue)."""
+    return {
+        "query": result.question,
+        "papers": [
+            {
+                "arxiv_id": p.arxiv_id, "title": p.title, "year": p.year, "authors": author_names(p.authors),
+                "primary_category": p.primary_category, "badges": p.badges, "full_text": p.state == "ready",
+                "rerank_score": round(p.rerank_score, 4), "prior": round(p.prior, 4),
+                "final_score": round(p.final_score, 4),
+            }
+            for p in result.papers
+        ],
+        "passages": [
+            {
+                "arxiv_id": x.arxiv_id, "source": x.source, "chunk_id": x.chunk_id, "section": x.section,
+                "text": x.text, "char_start": x.char_start, "char_end": x.char_end,
+                "rerank_score": round(x.rerank_score, 4),
+            }
+            for x in result.passages
+        ],
+        "timings_ms": result.timings_ms,
+        "reranker_device": result.reranker_device,
+        "counts": result.counts,
+    }  # fmt: skip

@@ -1,16 +1,21 @@
-"""GET /search: paper-level hybrid search plus passages (spec 11, 14). No LLM."""
+"""GET /search: paper-level hybrid search plus passages (spec 11, 14). No LLM.
+
+The models live only in the worker; the API enqueues an arq job and waits for its result.
+"""
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from core.config import get_config
-from retrieval.search import Filters, SearchModels, search
-
 router = APIRouter(tags=["search"])
+
+SEARCH_TIMEOUT_S = 60
+RESULT_POLL_S = 0.02
 
 
 class PaperOut(BaseModel):
@@ -46,10 +51,6 @@ class SearchOut(BaseModel):
     counts: dict[str, int]
 
 
-def _author_names(authors: list[dict[str, str]]) -> list[str]:
-    return [" ".join(x for x in (a.get("first", ""), a.get("last", "")) if x) for a in authors]
-
-
 @router.get("/search", response_model=SearchOut)
 async def search_endpoint(
     request: Request,
@@ -60,31 +61,25 @@ async def search_endpoint(
     limit: Annotated[int | None, Query(ge=1, le=50)] = None,
     passages: bool = True,
 ) -> SearchOut:
-    models: SearchModels | None = getattr(request.app.state, "search_models", None)
-    pool = getattr(request.app.state, "pg_pool", None)
-    if models is None or pool is None:
-        raise HTTPException(status_code=503, detail="search models not loaded")
-    filters = Filters(year_from=year_from, year_to=year_to, categories=tuple(categories or ()))
-    async with pool.acquire() as conn:
-        result = await search(conn, models, get_config(), q, filters=filters, limit=limit, with_passages=passages)
-    return SearchOut(
-        query=result.question,
-        papers=[
-            PaperOut(
-                arxiv_id=p.arxiv_id, title=p.title, year=p.year, authors=_author_names(p.authors),
-                primary_category=p.primary_category, badges=p.badges, full_text=p.state == "ready",
-                rerank_score=round(p.rerank_score, 4), prior=round(p.prior, 4), final_score=round(p.final_score, 4),
-            )
-            for p in result.papers
-        ],
-        passages=[
-            PassageOut(
-                arxiv_id=x.arxiv_id, source=x.source, chunk_id=x.chunk_id, section=x.section, text=x.text,
-                char_start=x.char_start, char_end=x.char_end, rerank_score=round(x.rerank_score, 4),
-            )
-            for x in result.passages
-        ],
-        timings_ms=result.timings_ms,
-        reranker_device=result.reranker_device,
-        counts=result.counts,
-    )  # fmt: skip
+    arq: ArqRedis | None = getattr(request.app.state, "arq", None)
+    if arq is None:
+        raise HTTPException(status_code=503, detail="job queue not connected")
+    params = {
+        "q": q,
+        "year_from": year_from,
+        "year_to": year_to,
+        "categories": categories or [],
+        "limit": limit,
+        "passages": passages,
+    }
+    started = time.perf_counter()
+    job = await arq.enqueue_job("search_job", params)
+    if job is None:
+        raise HTTPException(status_code=503, detail="could not enqueue search")
+    try:
+        result: dict[str, Any] = await job.result(timeout=SEARCH_TIMEOUT_S, poll_delay=RESULT_POLL_S)
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail="search timed out (is the worker running?)") from e
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    result["timings_ms"]["queue_overhead"] = round(elapsed_ms - result["timings_ms"].get("total", 0.0), 1)
+    return SearchOut.model_validate(result)

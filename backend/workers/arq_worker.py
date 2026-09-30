@@ -17,12 +17,13 @@ from arq.worker import func
 from pgvector.asyncpg import register_vector
 
 from core.config import ensure_data_dirs, get_config, get_settings, require_env
-from core.embeddings import load_embedder
+from core.embeddings import load_embedder, load_reranker
 from core.logging import setup_logging
 from core.redis import ARQ_QUEUE, get_redis
 from ingest.grobid import GrobidClient
 from ingest.janitor import run_janitor
 from ingest.pipeline import MAX_PARSE_FAILURES, PipelineDeps, chunk_embed_stage, parse_stage, pdf_path
+from retrieval.search import Filters, SearchModels, result_to_api, search
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,22 @@ async def chunk_paper(ctx: dict[str, Any], arxiv_id: str) -> str:
     except TRANSIENT_DB_ERRORS as e:
         log.warning("transient db conflict, retrying", extra={"arxiv_id": arxiv_id, "error": type(e).__name__})
         raise Retry(defer=5) from e
+
+
+async def search_job(ctx: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+    """GET /search runs here because the models live only in the worker."""
+    deps: PipelineDeps = ctx["deps"]
+    filters = Filters(
+        year_from=params.get("year_from"),
+        year_to=params.get("year_to"),
+        categories=tuple(params.get("categories") or ()),
+    )
+    async with deps.pool.acquire() as conn:
+        result = await search(
+            conn, ctx["search_models"], ctx["cfg"], params["q"], filters=filters, limit=params.get("limit"),
+            with_passages=params.get("passages", True),
+        )  # fmt: skip
+    return result_to_api(result)
 
 
 async def janitor_job(ctx: dict[str, Any]) -> str:
@@ -104,8 +121,12 @@ async def startup(ctx: dict[str, Any]) -> None:
         host=settings.postgres_host, port=settings.postgres_port, user=settings.postgres_user,
         password=require_env("POSTGRES_PASSWORD"), database=settings.postgres_db, min_size=1, max_size=6, init=_init,
     )  # fmt: skip
-    embedder = await asyncio.to_thread(load_embedder, cfg)
+    embedder, reranker = await asyncio.gather(
+        asyncio.to_thread(load_embedder, cfg), asyncio.to_thread(load_reranker, cfg)
+    )
+    gpu_lock = asyncio.Lock()  # one GPU: pipeline embedding and search share it
     ctx["cfg"] = cfg
+    ctx["search_models"] = SearchModels(embedder, reranker, cfg, lock=gpu_lock)
     ctx["deps"] = PipelineDeps(
         cfg=cfg,
         settings=settings,
@@ -113,7 +134,7 @@ async def startup(ctx: dict[str, Any]) -> None:
         redis=get_redis(),
         grobid=GrobidClient(settings.grobid_url),
         embedder=embedder,
-        gpu_lock=asyncio.Lock(),
+        gpu_lock=gpu_lock,
     )
     await recover(ctx["redis"], ctx["deps"])
     log.info("worker started")
@@ -129,6 +150,7 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         ping,
+        func(search_job, timeout=120, max_tries=1, keep_result=60),
         func(parse_paper, max_tries=MAX_PARSE_FAILURES + 1, timeout=900, keep_result=0),
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),
@@ -140,4 +162,5 @@ class WorkerSettings:
     queue_name = ARQ_QUEUE
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     health_check_interval = 30
-    max_jobs = 8
+    max_jobs = 16  # pipeline jobs mostly wait on GROBID; keep slots free for searches
+    poll_delay = 0.05  # arq's default 0.5s would add up to half a second to every search

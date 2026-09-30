@@ -45,7 +45,7 @@ services:
     command:
       - postgres
       - -c
-      - shared_buffers=2GB
+      - shared_buffers=1GB  # spec: 2GB; lowered to fit the 8GB Docker VM (PROGRESS.md)
       - -c
       - effective_cache_size=6GB
       - -c

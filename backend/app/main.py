@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from arq import create_pool as create_arq_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 
 from app.routers import admin, health, papers, search
 from core.config import ensure_data_dirs, get_config, get_settings
-from core.db import create_pool, get_engine, get_sessionmaker
-from core.embeddings import load_embedder, load_reranker
+from core.db import get_engine, get_sessionmaker
 from core.llm import LLMClient, db_call_logger
 from core.logging import setup_logging
 from core.redis import get_redis
-from retrieval.search import SearchModels
 
 log = logging.getLogger(__name__)
 
@@ -30,14 +29,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm = LLMClient(cfg, redis=get_redis(), call_logger=db_call_logger(get_sessionmaker()))
     app.state.llm_models = await llm.check_models()
     app.state.llm = llm
-    embedder, reranker = await asyncio.gather(
-        asyncio.to_thread(load_embedder, cfg), asyncio.to_thread(load_reranker, cfg)
-    )
-    app.state.search_models = SearchModels(embedder, reranker, cfg)
-    app.state.pg_pool = await create_pool(min_size=1, max_size=5)
-    log.info("api started", extra={"reranker_device": app.state.search_models.reranker_device})
+    # Local models live only in the worker; search and answers go through the arq queue.
+    app.state.arq = await create_arq_pool(RedisSettings.from_dsn(get_settings().redis_url))
+    log.info("api started")
     yield
-    await app.state.pg_pool.close()
+    await app.state.arq.aclose()
     await get_redis().aclose()
     await get_engine().dispose()
 
