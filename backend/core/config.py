@@ -109,6 +109,13 @@ class ModelPrice(_Section):
     output: float | None = None
 
 
+class FeedsConfig(_Section):
+    digest_days: int
+    top_n: int
+    min_score: float
+    keyword_boost: float
+
+
 class AppConfig(_Section):
     corpus: CorpusConfig
     score_weights: ScoreWeights
@@ -120,6 +127,7 @@ class AppConfig(_Section):
     agent: AgentConfig
     llm_client: LLMClientConfig
     arxiv: ArxivConfig
+    feeds: FeedsConfig
     llm_prices: dict[str, ModelPrice] = Field(default_factory=dict)
 
 

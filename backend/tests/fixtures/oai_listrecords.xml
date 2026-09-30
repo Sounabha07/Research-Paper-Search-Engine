@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <responseDate>2026-09-30T02:00:05Z</responseDate>
+  <request verb="ListRecords" metadataPrefix="arXiv" set="cs" from="2026-09-28">https://oaipmh.arxiv.org/oai</request>
+  <ListRecords>
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:2609.20001</identifier>
+        <datestamp>2026-09-29</datestamp>
+        <setSpec>cs</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/">
+          <id>2609.20001</id>
+          <created>2026-09-26</created>
+          <authors>
+            <author><keyname>Doe</keyname><forenames>Jane A.</forenames></author>
+            <author><keyname>Smith</keyname><forenames>John</forenames><suffix>Jr</suffix></author>
+          </authors>
+          <title>Sparse Mixtures of Experts
+  for Long-Context Retrieval</title>
+          <categories>cs.CL cs.LG</categories>
+          <comments>Accepted at NeurIPS 2026. Code: https://github.com/example/smoe</comments>
+          <license>http://creativecommons.org/licenses/by/4.0/</license>
+          <abstract>  We study sparse mixtures of experts for retrieval over long contexts and
+  report a 2x speedup.
+</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+    <record>
+      <header>
+        <identifier>oai:arXiv.org:1003.10001</identifier>
+        <datestamp>2026-09-29</datestamp>
+        <setSpec>math</setSpec>
+      </header>
+      <metadata>
+        <arXiv xmlns="http://arxiv.org/OAI/arXiv/">
+          <id>1003.10001</id>
+          <created>2010-03-02</created>
+          <updated>2026-09-28</updated>
+          <authors><author><keyname>Old</keyname><forenames>A.</forenames></author></authors>
+          <title>An Old Theorem Revisited</title>
+          <categories>math.CO</categories>
+          <abstract>A revised version of an old paper.</abstract>
+        </arXiv>
+      </metadata>
+    </record>
+    <record>
+      <header status="deleted">
+        <identifier>oai:arXiv.org:2609.20002</identifier>
+        <datestamp>2026-09-29</datestamp>
+      </header>
+    </record>
+    <resumptionToken cursor="0" completeListSize="2345">6064147|1001</resumptionToken>
+  </ListRecords>
+</OAI-PMH>

@@ -170,3 +170,28 @@ export type Collection = {
   updated_at: string;
   items: CollectionItem[];
 };
+
+export type Feed = {
+  id: string;
+  name: string;
+  query_text: string;
+  keywords: string[];
+  created_at: string;
+  last_period: string | null;
+};
+
+export type DigestPaper = {
+  arxiv_id: string;
+  title: string;
+  score: number;
+  similarity: number;
+  relevance: number;
+  keywords: string[];
+  one_line: string | null;
+};
+
+export type Digest = {
+  period: string;
+  created_at: string;
+  content: { since: string; generated_at: string; candidates: number; overview: string | null; model: string | null; papers: DigestPaper[] };
+};

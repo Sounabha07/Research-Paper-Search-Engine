@@ -11,6 +11,7 @@ from core.config import get_settings
 FETCH_URGENT = "fetch:urgent"
 FETCH_BULK = "fetch:bulk"
 FETCHER_HEARTBEAT = "fetcher:heartbeat"
+OAI_LAST_HARVEST = "oai:last_harvest"  # UTC date (YYYY-MM-DD) the last successful nightly harvest started
 ARQ_QUEUE = "arq:queue"
 ARQ_HEALTH_KEY = f"{ARQ_QUEUE}:health-check"
 

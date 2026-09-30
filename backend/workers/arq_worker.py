@@ -117,6 +117,32 @@ async def recompute_scores_job(ctx: dict[str, Any]) -> str:
     return await recompute_scores(ctx["cfg"])
 
 
+async def nightly_job(ctx: dict[str, Any]) -> str:
+    """Spec 16, 02:00 UTC: queue the OAI-PMH harvest in the fetcher; it enqueues post_harvest_job when done."""
+    from ingest.nightly import queue_harvest
+
+    return f"harvest queued from {await queue_harvest(get_redis())}"
+
+
+async def post_harvest_job(ctx: dict[str, Any]) -> str:
+    from ingest.nightly import post_harvest
+
+    return await post_harvest(ctx["cfg"])
+
+
+async def digest_job(ctx: dict[str, Any], feed_id: str | None = None, days: int | None = None) -> Any:
+    """Spec 16, weekly (Monday 03:00 UTC): a digest for every feed. With feed_id: that feed now (API)."""
+    from agent.digest import build_all, build_digest
+
+    agent, models = ctx["agent"], ctx["search_models"]
+    if feed_id is None:
+        return await build_all(agent.pool, agent.llm, models, agent.cfg)
+    feed = await agent.pool.fetchrow("SELECT * FROM feeds WHERE id = $1", uuid.UUID(feed_id))
+    if feed is None:
+        return None
+    return await build_digest(agent.pool, agent.llm, models, agent.cfg, dict(feed), days=days)
+
+
 async def recover(redis: ArqRedis, deps: PipelineDeps) -> None:
     rows = await deps.pool.fetch(
         "SELECT arxiv_id, state FROM papers WHERE state IN ('pdf_fetched', 'parsed', 'embedded')"
@@ -197,10 +223,16 @@ class WorkerSettings:
         func(parse_paper, max_tries=MAX_PARSE_FAILURES + 1, timeout=900, keep_result=0),
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(resolve_refs_job, max_tries=3, timeout=900, keep_result=0),
+        func(post_harvest_job, max_tries=1, timeout=6 * 3600, keep_result=3600),
+        func(digest_job, max_tries=1, timeout=1800, keep_result=3600),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),
         func(recompute_scores_job, timeout=3600, max_tries=1),
     ]
-    cron_jobs: ClassVar[list[Any]] = [cron(janitor_job, minute={0, 30}, run_at_startup=True)]
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(janitor_job, minute={0, 30}, run_at_startup=True),
+        cron(nightly_job, hour=2, minute=0, unique=True),  # container clock is UTC
+        cron(digest_job, weekday="mon", hour=3, minute=0, unique=True),
+    ]
     on_startup = startup
     on_shutdown = shutdown
     queue_name = ARQ_QUEUE

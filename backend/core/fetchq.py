@@ -30,9 +30,14 @@ def meta_job(ids: list[str], attempt: int = 1) -> str:
     return json.dumps({"type": "meta", "ids": ids, "attempt": attempt})
 
 
+def oai_job(sets: list[str], from_date: str) -> str:
+    """Nightly OAI-PMH harvest (spec 6.2): records modified since from_date (YYYY-MM-DD) in each set."""
+    return json.dumps({"type": "oai", "sets": sets, "from": from_date})
+
+
 def parse_job(raw: str) -> dict[str, Any]:
     job = json.loads(raw)
-    if job.get("type") not in ("pdf", "meta"):
+    if job.get("type") not in ("pdf", "meta", "oai"):
         raise ValueError(f"unknown fetch job {raw!r}")
     return cast(dict[str, Any], job)
 

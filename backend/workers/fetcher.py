@@ -14,6 +14,7 @@ import json
 import logging
 import signal
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Awaitable
 from typing import Any, cast
 
@@ -26,8 +27,11 @@ from core.arxiv import ArxivClient, AtomEntry, FetchError, RateLimiter, file_ste
 from core.config import AppConfig, Settings, ensure_data_dirs, get_config, get_settings, require_env
 from core.fetchq import meta_job, parse_job, pdf_job
 from core.logging import setup_logging
-from core.redis import FETCH_BULK, FETCH_URGENT, FETCHER_HEARTBEAT, fetch_done_channel, get_redis
+from core.redis import FETCH_BULK, FETCH_URGENT, FETCHER_HEARTBEAT, OAI_LAST_HARVEST, fetch_done_channel, get_redis
 from ingest import metrics
+from ingest.landmarks import load_landmarks
+from ingest.metadata import _STAGE_DDL, Counts, MetadataPass, write_batch
+from ingest.oai import parse_list_records, server_date
 from ingest.references import lock_citation_graph, resolve_new_papers
 from ingest.text import normalize_title
 
@@ -76,6 +80,8 @@ class Fetcher:
                 job = parse_job(raw)
                 if job["type"] == "pdf":
                     await self.fetch_pdf(job["arxiv_id"], urgent=queue == FETCH_URGENT)
+                elif job["type"] == "oai":
+                    await self.harvest(job["sets"], job["from"])
                 else:
                     await self.fetch_meta(job["ids"], int(job.get("attempt", 1)))
             except Exception:
@@ -159,6 +165,68 @@ class Fetcher:
             "arxiv metadata filled",
             extra={"requested": len(missing), "found": len(entries), "title_matches": matched},
         )
+
+    async def _drain_urgent(self) -> None:
+        """Between harvest pages: research runs and "Get full text" requests must not wait for the harvest."""
+        while raw := await cast(Awaitable[str | None], self.redis.lpop(FETCH_URGENT)):
+            job = parse_job(raw)
+            if job["type"] == "pdf":
+                await self.fetch_pdf(job["arxiv_id"], urgent=True)
+
+    async def harvest(self, sets: list[str], from_date: str) -> None:
+        """Spec 6.2/16: records modified since from_date; new in-window papers (by <created>) are upserted through
+        the metadata pass, then the worker embeds abstracts and recomputes scores (post_harvest_job)."""
+        from core.config import config_path
+
+        try:  # the repository's own date, not ours: a `from` later than its date is refused (HTTP 406)
+            today = server_date(await self.client.list_records({"verb": "Identify"}))
+        except (FetchError, ET.ParseError) as e:
+            log.error("oai identify failed", extra={"error": str(e)})
+            return
+        started_date = today or time.strftime("%Y-%m-%d", time.gmtime())
+        if from_date > started_date:
+            log.info("oai from date after the repository date, clamped", extra={"from": from_date, "to": started_date})
+            from_date = started_date
+        mp = MetadataPass(self.cfg, load_landmarks(config_path().parent / self.cfg.corpus.landmarks_file))
+        pages = deleted = 0
+        t0 = time.monotonic()
+        async with self.pool.acquire() as conn:
+            await conn.execute(_STAGE_DDL)
+            for set_ in sets:
+                params = {"verb": "ListRecords", "metadataPrefix": "arXiv", "set": set_, "from": from_date}
+                while True:
+                    try:
+                        page = parse_list_records(await self.client.list_records(params))
+                    except FetchError as e:
+                        log.error("oai harvest failed", extra={"set": set_, "from": from_date, "error": str(e)})
+                        return  # the next nightly run starts again from the last successful harvest date
+                    pages += 1
+                    if page.error == "noRecordsMatch":
+                        break
+                    if page.error:
+                        log.error("oai error", extra={"set": set_, "code": page.error})
+                        return
+                    deleted += page.deleted
+                    rows = [r for r in (mp.process(rec) for rec in page.records) if r is not None]
+                    if rows:
+                        await write_batch(conn, rows, mp.counts)
+                    log.info(
+                        "oai page", extra={"set": set_, "records": len(page.records), "kept": len(rows),
+                                           "complete_size": page.complete_size},
+                    )  # fmt: skip
+                    await self._drain_urgent()
+                    if not page.token:
+                        break
+                    params = {"verb": "ListRecords", "resumptionToken": page.token}
+        c: Counts = mp.counts
+        await self.redis.set(OAI_LAST_HARVEST, started_date)
+        await self.arq.enqueue_job("post_harvest_job", _job_id=f"post_harvest:{started_date}")
+        log.info(
+            "oai harvest done",
+            extra={"sets": sets, "from": from_date, "pages": pages, "records": c.lines, "deleted": deleted,
+                   "in_window": c.in_window, "inserted": c.inserted, "updated": c.updated,
+                   "unchanged": c.unchanged, "s": round(time.monotonic() - t0, 1)},
+        )  # fmt: skip
 
     async def aclose(self) -> None:
         await self.client.aclose()

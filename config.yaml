@@ -68,10 +68,15 @@ llm_client:
     gemini-3.5-flash: 9              # conservative; its binding free-tier limit is 20 requests/day
   backoff_base_s: 1
   backoff_max_s: 30
-  cache_ttl_days: 7
+  cache_ttl_days: 30                 # long enough that eval reruns (make eval ARGS=--answers) come from the cache
 arxiv:
   min_interval_s: 3.1
   user_agent: "arxiv-research-engine/0.1 (mailto:${CONTACT_EMAIL})"
+feeds:                               # weekly digests (spec 16)
+  digest_days: 7                     # papers submitted in the last N days
+  top_n: 10
+  min_score: 0.3                     # cross-encoder relevance (0-1) + keyword boost; bge-small similarity alone could not separate on-topic papers
+  keyword_boost: 0.05                # added when a feed keyword appears in title or abstract
 llm_prices:                          # USD per 1M tokens (output includes thinking tokens). null = unknown, cost is logged as null.
   gemini-3.5-flash: {input: 1.50, output: 9.00}
   gemini-3.5-flash-lite: {input: 0.30, output: 2.50}

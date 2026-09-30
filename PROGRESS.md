@@ -445,3 +445,57 @@ Preprint wording
   Method-description originals (TaylorShift, element-wise attention) are no longer rewritten.
 - 50 real sentences: 44 supported, 3 rewritten, 3 removed (previous rule: 27 / 20 / 3). One rewrite attributes QLoRA's
   "first method ..." to "a 2024 preprint": QLoRA has no venue in the metadata, so it counts as a preprint.
+
+### Milestone 8 (in progress 2026-09-30: built; full eval waits for approval of the question list)
+Nightly job (spec 16)
+- Worker cron 02:00 UTC `nightly_job` queues an OAI-PMH harvest (`cs`, `math`) at the front of the fetcher's bulk
+  queue; the fetcher (the only arXiv client) pages through ListRecords at 1 request / 3.1 s, handles urgent PDF
+  fetches between pages, converts records to the Kaggle shape (`ingest/oai.py`) and upserts them through the same
+  metadata pass (window/category filter, signals). Then `post_harvest_job`: foundational flags (cs/math papers older
+  than the window with >= 20 full-text citations; `discovered` ones join the pipeline), abstract embeddings, scores and
+  PageRank. `make nightly` runs it now. `oai:last_harvest` keeps the repository date of the last successful harvest;
+  the next `from` is one day earlier.
+- Live test: BLOCKED. arXiv's OAI endpoint answers Identify, ListSets and ListMetadataFormats (200, XML), but every
+  ListRecords request gets HTTP 406 with an empty body from its Varnish layer, whatever the Accept or Accept-Encoding
+  header or `from` date (5 diagnostic requests, all spaced >= 3.1 s). Also: the repository reports its date as
+  2026-09-17, 13 days behind this machine; a `from` later than that is refused, so `from` is now clamped to the
+  repository date (read with Identify first). The harvest code is tested against a sample response
+  (`tests/fixtures/oai_listrecords.xml`). The nightly job logs the failure and tries again the next night.
+- `post_harvest_job` on its own: 104 s; 7 foundational papers; 0 abstracts pending; scores recomputed.
+
+Feeds (spec 10, 14, 16)
+- `GET/POST /feeds`, `GET/PATCH/DELETE /feeds/{id}`, `GET /feeds/{id}/digests`, `POST /feeds/{id}/digests`
+  (build now). Weekly cron Monday 03:00 UTC builds a digest per feed and ISO week (`2026-W40`).
+- Digest: papers submitted in the last 7 days; candidates by abstract-embedding similarity to the feed query (200) and
+  keyword matches; the best 60 by similarity are scored with the cross-encoder (as in search); score = relevance +
+  0.05 if a keyword matches; kept if >= 0.3, top 10; summarized with flash-lite (overview + one line per paper,
+  worded as "a paper proposes/reports").
+  Calibration on a test feed ("Efficient LLM inference"; keywords speculative decoding, KV cache, quantization):
+  embedding similarity alone kept 10 papers, mostly off-topic quantization papers (image compression, speech);
+  keyword-only inclusion was the main cause. With the reranker gate: 4 papers (NebulaSD 0.95, MILO 0.87, FlashLoop
+  0.52, GHOST-Q 0.35). 22 s per digest.
+- `/feeds` page: create, build now, latest digest with relevance and keyword matches, delete.
+
+Eval (spec 17)
+- `eval/questions.yaml`: 40 questions (30 quick, 10 deep) with expected papers, all verified in the corpus with an
+  abstract embedding (state ready or signals_done); papers only known from reference lookups (`discovered`, no
+  embedding: e.g. HNSW, MAML, Lottery Ticket, SimCLR) were left out.
+- `eval/run_eval.py` (`make eval`):
+  - Retrieval: section-11 retrieval with the question as the only query, so no Gemini calls; recall@10, MRR,
+    passage hit@10, latency p50/p95.
+  - Ablations, patched in the eval process only: `--no-keyword`, `--no-vector`, `--no-rerank`, `--ablations a,b,c`,
+    `--chunk-size N` (re-chunks full-text papers from parsed/ into schema `eval_csN`, read via search_path),
+    `--embedding M` (builds `eval_emb_*` abstract + chunk embeddings once, resumable; hours for the whole corpus).
+  - `--answers`: the pipeline through the API (with REWRITE), response cache on (TTL raised to 30 days so reruns
+    are free): latency p50/p95 per mode, cost, removed-claims rate, writer fallbacks, recall@10 of the pipeline's
+    selection, and `results/citation_sample_<ts>.csv` of (sentence, cited passage) pairs for manual precision.
+  - Writes `eval/results/<ts>.json` and `.md` (gitignored).
+- Smoke test (4 questions, retrieval only; not the eval): baseline recall@10 0.50, no-keyword 0.75, no-vector 0.62,
+  no-rerank 0.38. The Transformer question missed "Attention Is All You Need" at baseline. Full numbers after
+  approval of the questions.
+
+README: rewritten with architecture and pipeline diagrams (mermaid), setup, operations, free-tier notes, eval usage,
+a results table to fill after the full eval, and a demo video placeholder.
+
+Also: the frontend image build no longer needs GROBID stopped (10 GB VM, GROBID capped): built with GROBID running,
+no kill.

@@ -18,8 +18,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from verifier_adversarial import paper_meta  # same directory
-
 from agent import prompts
 from agent.run import format_notes, verify_sentences
 from agent.text import parse_answer, strip_tags
@@ -30,13 +28,17 @@ from core.llm import LLMClient
 from core.logging import setup_logging
 from core.redis import get_redis
 
+from verifier_adversarial import paper_meta  # same directory
+
 WRITE_MAX_TOKENS = 8192
 
 
 async def load_run(run_id: uuid.UUID) -> dict[str, Any]:
     conn = await raw_connection()
     try:
-        q = await conn.fetchval("SELECT coalesce(standalone_question, question) FROM research_runs WHERE id = $1", run_id)
+        q = await conn.fetchval(
+            "SELECT coalesce(standalone_question, question) FROM research_runs WHERE id = $1", run_id
+        )
         notes = await conn.fetch(
             "SELECT claim, CASE WHEN chunk_id IS NOT NULL THEN 'c:' || chunk_id ELSE 'a:' || arxiv_id END AS sid"
             " FROM evidence_notes WHERE run_id = $1 ORDER BY id",
@@ -123,23 +125,29 @@ async def main() -> None:
                                    "latency_s": r.latency_ms / 1000, "out_tokens": r.output_tokens,
                                    "cost_usd": r.cost_usd, "cache_hit": r.cache_hit}  # fmt: skip
             if r.model != model and run["saved_raw"] and run["saved_model"] == model:
-                row["note"] = (f"{model} unavailable (daily quota); scored the run's saved {model} answer instead"
-                               " (older prompt without source status; rewritten sentences appear as rewritten)")
+                row["note"] = (
+                    f"{model} unavailable (daily quota); scored the run's saved {model} answer instead"
+                    " (older prompt without source status; rewritten sentences appear as rewritten)"
+                )
                 row |= await score(llm, run["saved_raw"], run["sources"])
             else:
                 row |= await score(llm, r.text, run["sources"])
             rows.append(row)
-            print(f"{run['question'][:48]:<48} {model:<22} wrote={r.model:<22} {row['latency_s']:5.1f}s "
-                  f"kept {row['kept']:>2}/{row['sentences']:<2} removed {row['removed']} rewritten {row['rewritten']} "
-                  f"words {row['words_kept']:>3} papers {row['papers_cited']:>2} {row.get('note', '')}")
+            print(
+                f"{run['question'][:48]:<48} {model:<22} wrote={r.model:<22} {row['latency_s']:5.1f}s "
+                f"kept {row['kept']:>2}/{row['sentences']:<2} removed {row['removed']} rewritten {row['rewritten']} "
+                f"words {row['words_kept']:>3} papers {row['papers_cited']:>2} {row.get('note', '')}"
+            )
     Path(args.out).write_text(json.dumps(rows, indent=1, default=str), encoding="utf-8")
     for model in (cfg.models.llm_main, cfg.models.llm_light):
         rs = [r for r in rows if r["model"] == model]
         n = len(rs) or 1
-        print(f"{model:<22} mean: removed {sum(r['removed'] for r in rs) / n:.1f}, rewritten "
-              f"{sum(r['rewritten'] for r in rs) / n:.1f}, kept sentences {sum(r['kept'] for r in rs) / n:.1f}, "
-              f"words {sum(r['words_kept'] for r in rs) / n:.0f}, papers {sum(r['papers_cited'] for r in rs) / n:.1f}, "
-              f"time {sum(r['latency_s'] for r in rs) / n:.1f} s")
+        print(
+            f"{model:<22} mean: removed {sum(r['removed'] for r in rs) / n:.1f}, rewritten "
+            f"{sum(r['rewritten'] for r in rs) / n:.1f}, kept sentences {sum(r['kept'] for r in rs) / n:.1f}, "
+            f"words {sum(r['words_kept'] for r in rs) / n:.0f}, papers {sum(r['papers_cited'] for r in rs) / n:.1f}, "
+            f"time {sum(r['latency_s'] for r in rs) / n:.1f} s"
+        )
 
 
 if __name__ == "__main__":

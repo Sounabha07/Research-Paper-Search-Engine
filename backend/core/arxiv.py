@@ -147,13 +147,16 @@ class ArxivClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _get(self, url: str, params: dict[str, str] | None = None, max_attempts: int = 0) -> httpx.Response:
+    async def _get(
+        self, url: str, params: dict[str, str] | None = None, max_attempts: int = 0,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:  # fmt: skip
         max_attempts = max_attempts or self.MAX_ATTEMPTS
         for attempt in range(1, max_attempts + 1):
             await self._limiter.wait()
             started = time.monotonic()
             try:
-                resp = await self._client.get(url, params=params, headers=self._headers)
+                resp = await self._client.get(url, params=params, headers={**self._headers, **(headers or {})})
             except httpx.TransportError as e:
                 delay = self._backoff(attempt)
                 log.warning("arxiv transport error", extra={"url": url, "attempt": attempt, "error": str(e)})
@@ -164,7 +167,8 @@ class ArxivClient:
                 if resp.status_code == 404:
                     raise FetchError(f"404 for {url}", permanent=True)
                 if resp.status_code not in (429, 500, 502, 503, 504):
-                    raise FetchError(f"HTTP {resp.status_code} for {url}")
+                    body = " ".join(resp.text[:300].split())
+                    raise FetchError(f"HTTP {resp.status_code} for {resp.request.url}: {body}")
                 ra = retry_after_seconds(resp.headers.get("Retry-After"))
                 delay = min(ra, self.MAX_RETRY_AFTER_S) if ra is not None else self._backoff(attempt)
                 log.warning(
@@ -185,6 +189,13 @@ class ArxivClient:
             ctype = resp.headers.get("content-type", "")
             raise FetchError(f"not a PDF ({ctype}, {len(content)} bytes)", permanent=ctype.startswith("text/html"))
         return PdfResult(content, self.last_request_s)
+
+    async def list_records(self, params: dict[str, str]) -> str:
+        """One OAI-PMH request (ListRecords page, or Identify) (spec 6.2). 503 + Retry-After is honored by _get."""
+        from ingest.oai import OAI_URL
+
+        resp = await self._get(OAI_URL, params, headers={"Accept": "text/xml, application/xml"})
+        return resp.text
 
     async def query_ids(self, ids: list[str]) -> list[AtomEntry]:
         """Metadata for up to 100 ids (spec 6.2b). Only for referenced ids missing from the DB."""

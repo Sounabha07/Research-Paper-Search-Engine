@@ -10,7 +10,7 @@ from arq import create_pool as create_arq_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
 
-from app.routers import admin, collections, health, papers, search, threads
+from app.routers import admin, collections, feeds, health, papers, search, threads
 from core.config import ensure_data_dirs, get_config, get_settings
 from core.db import create_pool, get_engine, get_sessionmaker
 from core.llm import LLMClient, db_call_logger
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router)
     app.include_router(threads.router)
     app.include_router(collections.router)
+    app.include_router(feeds.router)
     return app
 
 

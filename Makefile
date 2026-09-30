@@ -14,7 +14,7 @@ help:
 	@echo "ingest-metadata [ARGS=--dry-run|--skip-download] | score | embed"
 	@echo "landmarks | warm TOPIC=... [N=30] | fetch IDS=\"...\" | fulltext-report | catalog | resolve-refs"
 	@echo "eval-verifier [ARGS=--legacy|--no-names]"
-	@echo "nightly | eval  (later milestones)"
+	@echo "nightly | eval [ARGS=\"--answers | --no-keyword | --no-vector | --no-rerank | --embedding M | --chunk-size N\"]"
 
 up:
 	$(COMPOSE) up -d --build postgres redis grobid
@@ -97,5 +97,11 @@ EVAL_RUN := $(COMPOSE) run --rm -v ./eval:/app/eval -e PYTHONPATH=/app/backend w
 eval-verifier:
 	$(EVAL_RUN) /app/eval/verifier_adversarial.py $(ARGS)
 
-nightly eval:
-	@echo "make $@ arrives in milestone 8" && exit 1
+# Nightly job now (normally 02:00 UTC in the worker): OAI-PMH harvest in the fetcher, then embeddings and scores.
+nightly:
+	$(COMPOSE) run --rm --no-deps worker python -m ingest.nightly
+
+# Eval (eval/questions.yaml). Retrieval metrics and ablations make no Gemini calls; --answers runs the answer
+# pipeline through the API (response cache: reruns are free). ARGS e.g. "--no-rerank", "--answers".
+eval:
+	$(EVAL_RUN) /app/eval/run_eval.py $(ARGS)

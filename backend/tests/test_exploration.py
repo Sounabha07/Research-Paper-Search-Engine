@@ -70,3 +70,31 @@ def test_collection_item_validation() -> None:
         ItemIn(item_type="paper", run_id=uuid.uuid4())
     with pytest.raises(ValidationError):
         ItemIn(item_type="run", arxiv_id="2106.09685")
+
+
+def test_digest_ranking_and_period() -> None:
+    from datetime import UTC, datetime
+
+    from agent.digest import matched_keywords, period_of, rank_candidates
+
+    rows = [
+        {"arxiv_id": "a", "title": "Speculative decoding at scale", "abstract": "", "relevance": 0.70},
+        {"arxiv_id": "b", "title": "Unrelated", "abstract": "graph coloring", "relevance": 0.60},
+        {"arxiv_id": "c", "title": "Fast LLM inference", "abstract": "", "relevance": 0.80},
+    ]
+    kept = rank_candidates(rows, ["speculative decoding"], min_score=0.72, keyword_boost=0.05, top_n=10)
+    # b is below the floor; a clears it only with its keyword boost
+    assert [(k["arxiv_id"], k["score"], k["keywords"]) for k in kept] == [
+        ("c", 0.8, []), ("a", 0.75, ["speculative decoding"])
+    ]  # fmt: skip
+    assert matched_keywords(["LoRA", " "], "QLoRA: efficient finetuning", "") == ["LoRA"]
+    assert period_of(datetime(2026, 9, 30, tzinfo=UTC)) == "2026-W40"
+
+
+def test_harvest_from_date() -> None:
+    from datetime import date
+
+    from ingest.nightly import harvest_from
+
+    assert harvest_from("2026-09-29") == "2026-09-28"  # one day of overlap
+    assert harvest_from(None, today=date(2026, 9, 30)) == "2026-09-27"
