@@ -5,7 +5,11 @@ foundational papers). Ask a question; it finds the relevant papers, reads them, 
 sentence cites the exact passage it came from. A verifier checks each sentence against its sources and removes or
 rewrites what they do not support.
 
-> Demo video: _placeholder_
+![Demo: an answer with checked citations, the passage behind a citation, and the reader](demo/demo.gif)
+
+**Demo video (2.5 min):** [demo/demo.mp4](demo/demo.mp4): quick answer with the live trace, citation passages, the
+reader, the citation graph, full text on demand, deep mode, a mathematics question, and BibTeX export. The answers in
+the video are replayed from the response cache; live answers take about 20 to 40 s and cost about $0.015.
 
 The build log, decisions, and measurements for every milestone are in [PROGRESS.md](PROGRESS.md); the full spec is
 [MASTER_PROMPT.md](MASTER_PROMPT.md).
@@ -242,5 +246,20 @@ rank 1 in the A/B set.
 backend/   FastAPI app, arq worker, fetcher, ingestion, retrieval, answer pipeline, tests
 frontend/  Next.js app (App Router, Tailwind, shadcn/ui)
 eval/      questions, eval runner, verifier and model comparisons, results/
+demo/      scripted demo recording (Playwright, separate virtualenv) and the rendered video
 seeds/     landmark papers (validated against the Kaggle metadata at load time)
 ```
+
+## Recording the demo
+
+The demo is scripted with Playwright in its own virtualenv (not a dependency of the app):
+
+```bash
+python -m venv demo/.venv && demo/.venv/Scripts/python -m pip install -r demo/requirements.txt
+demo/.venv/Scripts/python -m playwright install chromium
+demo/.venv/Scripts/python demo/record.py         # app running; questions run once beforehand so they replay from cache
+demo/.venv/Scripts/python demo/make_video.py     # cuts the waits -> demo/demo.mp4 (prints step times)
+demo/.venv/Scripts/python demo/make_video.py --gif START DURATION   # -> demo/demo.gif
+```
+
+`DEMO_FETCH_PAPER` picks the abstract-only paper used for the "Get full text" step (it has full text afterwards).
