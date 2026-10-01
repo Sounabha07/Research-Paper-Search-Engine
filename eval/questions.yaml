@@ -1,4 +1,4 @@
-# Eval questions (spec 17). Each expected paper was checked to be in the corpus with an abstract embedding
+# Eval questions. Each expected paper was checked to be in the corpus with an abstract embedding
 # (state ready = full text, or signals_done = abstract level) and its title verified against the id.
 # Papers only known from reference lookups (state 'discovered', no embedding) were left out on purpose.
 #

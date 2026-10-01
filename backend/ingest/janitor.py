@@ -1,4 +1,4 @@
-"""pdf_tmp janitor (spec 8.6): delete orphans older than 24h and cap the directory at 4GB.
+"""pdf_tmp janitor: delete orphans older than 24h and cap the directory at 4GB.
 
 A PDF is an orphan when its paper is no longer waiting to be parsed (state other than
 pdf_fetched), or the file does not belong to any paper. Over the cap, the oldest waiting

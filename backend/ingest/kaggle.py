@@ -1,4 +1,4 @@
-"""Kaggle arXiv metadata snapshot (spec 6.1): download and stream from the zip, never unzip."""
+"""Kaggle arXiv metadata snapshot: download and stream from the zip, never unzip."""
 
 from __future__ import annotations
 

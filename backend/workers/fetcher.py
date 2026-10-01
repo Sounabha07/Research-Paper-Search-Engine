@@ -1,9 +1,9 @@
-"""The single process that talks to arXiv (spec 6.4). Plain asyncio loop, not arq.
+"""The single process that talks to arXiv. Plain asyncio loop, not arq.
 
 Pops `BLPOP fetch:urgent fetch:bulk` (urgent always drains first), enforces
 `arxiv.min_interval_s` between any two requests with one in-process limiter, writes PDFs
 to `pdf_tmp/`, and hands them to the arq pipeline. Also fills metadata for referenced
-arXiv ids missing from the DB (spec 6.2b).
+arXiv ids missing from the DB.
 """
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ class Fetcher:
                 await self.fetch_pdf(job["arxiv_id"], urgent=True)
 
     async def harvest(self, sets: list[str], from_date: str) -> None:
-        """Spec 6.2/16: records modified since from_date; new in-window papers (by <created>) are upserted through
+        """Records modified since from_date; new in-window papers (by <created>) are upserted through
         the metadata pass, then the worker embeds abstracts and recomputes scores (post_harvest_job)."""
         from core.config import config_path
 

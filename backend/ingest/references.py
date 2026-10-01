@@ -1,4 +1,4 @@
-"""Reference resolution into citation edges and stubs (spec 6.5).
+"""Reference resolution into citation edges and stubs.
 
 Order: (1) arXiv id in the reference, (2) exact normalized title, (3) trigram similarity
 >= 0.9 on title plus year within 1, against corpus papers; then (4) exact title and

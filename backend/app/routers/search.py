@@ -1,4 +1,4 @@
-"""GET /search: paper-level hybrid search plus passages (spec 11, 14). No LLM.
+"""GET /search: paper-level hybrid search plus passages. No LLM.
 
 The models live only in the worker; the API enqueues an arq job and waits for its result.
 """

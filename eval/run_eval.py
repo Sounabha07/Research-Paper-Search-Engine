@@ -1,4 +1,4 @@
-"""Eval suite (spec 17).
+"""Eval suite.
 
   python /app/eval/run_eval.py [--ids 1,2,3] [--limit N] [--ablations baseline,no-keyword,no-vector,no-rerank]
                                [--no-keyword] [--no-vector] [--no-rerank] [--embedding MODEL] [--chunk-size N]

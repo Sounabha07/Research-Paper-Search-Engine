@@ -1,4 +1,4 @@
-"""arXiv ids and the HTTP client used by the fetcher (spec 6.2b, 6.3, 6.4).
+"""arXiv ids and the HTTP client used by the fetcher.
 
 Only the fetcher process may call `ArxivClient`: it owns the single global rate limiter.
 """
@@ -27,7 +27,7 @@ QUERY_URL = "https://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 
-# Spec 6.5: new style 2106.09685(v2), old style hep-th/9901001 or math.AG/0101001.
+# New style 2106.09685(v2), old style hep-th/9901001 or math.AG/0101001.
 NEW_ID = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(v\d+)?(?!\d)")
 OLD_ID = re.compile(r"(?<![\w.-])([a-z\-]+)(\.[A-Z]{2})?/(\d{7})(v\d+)?(?!\d)")
 
@@ -136,7 +136,7 @@ class ArxivClient:
         self._limiter = limiter
         self._sleep = sleep
         self.last_request_s = 0.0  # duration of the last HTTP request, excluding rate-limit waits
-        self._headers = {"User-Agent": cfg.arxiv.user_agent}  # sent on every request (spec 6.3)
+        self._headers = {"User-Agent": cfg.arxiv.user_agent}  # sent on every request
         # Single connection, as arXiv's terms require.
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=20.0),
@@ -191,14 +191,14 @@ class ArxivClient:
         return PdfResult(content, self.last_request_s)
 
     async def list_records(self, params: dict[str, str]) -> str:
-        """One OAI-PMH request (ListRecords page, or Identify) (spec 6.2). 503 + Retry-After is honored by _get."""
+        """One OAI-PMH request (ListRecords page, or Identify). 503 + Retry-After is honored by _get."""
         from ingest.oai import OAI_URL
 
         resp = await self._get(OAI_URL, params, headers={"Accept": "text/xml, application/xml"})
         return resp.text
 
     async def query_ids(self, ids: list[str]) -> list[AtomEntry]:
-        """Metadata for up to 100 ids (spec 6.2b). Only for referenced ids missing from the DB."""
+        """Metadata for up to 100 ids. Only for referenced ids missing from the DB."""
         if not 0 < len(ids) <= 100:
             raise ValueError("query_ids takes 1 to 100 ids")
         # low priority: few attempts, the caller re-queues, so urgent PDF fetches are not stuck behind backoff

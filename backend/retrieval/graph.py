@@ -1,4 +1,4 @@
-"""Citation graph around papers (spec 14 `GET /papers/{id}/graph?hops=`, spec 15 citation graph tab).
+"""Citation graph around papers.
 
 Nodes are corpus papers and stub papers (references outside the corpus, `stub:{id}`); edges run from the citing
 paper to the cited one. Citation counts are counted within this corpus (fulltext_citations for papers,

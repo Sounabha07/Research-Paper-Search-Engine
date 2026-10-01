@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 CACHE_PREFIX = "llmcache:v2:"  # v2: fallback answers are no longer cached under the requested model
-DEFAULT_THINKING_LEVEL = "low"  # spec 6.7
+DEFAULT_THINKING_LEVEL = "low"
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
 

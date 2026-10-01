@@ -1,4 +1,4 @@
-"""Feeds (spec 10, 14, 16): saved interests with weekly digests of new papers."""
+"""Feeds: saved interests with weekly digests of new papers."""
 
 from __future__ import annotations
 

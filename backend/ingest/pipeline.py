@@ -1,4 +1,4 @@
-"""Full-text pipeline stages (spec 8), run by the arq worker. Each stage is idempotent per paper.
+"""Full-text pipeline stages, run by the arq worker. Each stage is idempotent per paper.
 
 pdf_fetched -> parse (GROBID, PyMuPDF fallback) -> parsed
             -> chunk + embed (one transaction)  -> embedded
@@ -168,7 +168,7 @@ async def chunk_embed_stage(deps: PipelineDeps, arxiv_id: str) -> str:
             await _write_chunks(conn, arxiv_id, chunks, vectors)
             await store_references(conn, arxiv_id, doc.references)
             await _set_state(conn, arxiv_id, "embedded")
-        pdf_path(deps.settings, arxiv_id).unlink(missing_ok=True)  # spec 8.4: right after the commit
+        pdf_path(deps.settings, arxiv_id).unlink(missing_ok=True)  # right after the commit
         await metrics.record(
             deps.redis, arxiv_id, chunks=len(chunks), references=len(doc.references),
             tokens=sum(c.token_count for c in chunks),

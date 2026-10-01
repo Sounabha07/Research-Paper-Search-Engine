@@ -1,4 +1,4 @@
-"""Landmark list loading and validation against Kaggle metadata (spec 7).
+"""Landmark list loading and validation against Kaggle metadata.
 
 The hand-compiled titles are often shortened ("Batch Normalization", "GShard"), so a
 match accepts: equal normalized titles, the list title being a prefix of the real one,

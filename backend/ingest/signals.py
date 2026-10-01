@@ -1,4 +1,4 @@
-"""Per-paper metadata signals (spec 9): venue acceptance, code availability, survey/benchmark flags."""
+"""Per-paper metadata signals: venue acceptance, code availability, survey/benchmark flags."""
 
 from __future__ import annotations
 

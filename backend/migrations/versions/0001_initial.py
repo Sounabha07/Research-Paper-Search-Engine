@@ -1,4 +1,4 @@
-"""Initial schema: all tables from the spec (section 10).
+"""Initial schema: all tables.
 
 Revision ID: 0001
 Revises:

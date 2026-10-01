@@ -34,7 +34,7 @@ type Stats = {
   generated_at: string;
 };
 
-// Pipeline order (spec 8), so the table reads top to bottom as papers progress.
+// Pipeline order, so the table reads top to bottom as papers progress.
 const STATE_ORDER = [
   "discovered",
   "metadata_done",

@@ -1,4 +1,4 @@
-"""Abstract embeddings for tier 1 papers (spec 8), plus the paper-level HNSW index.
+"""Abstract embeddings for tier 1 papers, plus the paper-level HNSW index.
 
 Usage: python -m ingest.abstract_embed
 

@@ -1,8 +1,8 @@
-"""Fetch queue (spec 6.4): jobs for the single arXiv fetcher process.
+"""Fetch queue: jobs for the single arXiv fetcher process.
 
 Queues are Redis lists popped with `BLPOP fetch:urgent fetch:bulk`. Jobs are JSON:
   {"type": "pdf", "arxiv_id": "2106.09685"}
-  {"type": "meta", "ids": ["1234.5678", ...]}        (spec 6.2b, <= 100 ids)
+  {"type": "meta", "ids": ["1234.5678", ...]}        (<= 100 ids)
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def meta_job(ids: list[str], attempt: int = 1) -> str:
 
 
 def oai_job(sets: list[str], from_date: str) -> str:
-    """Nightly OAI-PMH harvest (spec 6.2): records modified since from_date (YYYY-MM-DD) in each set."""
+    """Nightly OAI-PMH harvest: records modified since from_date (YYYY-MM-DD) in each set."""
     return json.dumps({"type": "oai", "sets": sets, "from": from_date})
 
 

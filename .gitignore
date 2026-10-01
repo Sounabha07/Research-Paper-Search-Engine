@@ -30,3 +30,8 @@ eval/results/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local tool files (not part of the project)
+CLAUDE.md
+AGENTS.md
+.claude/

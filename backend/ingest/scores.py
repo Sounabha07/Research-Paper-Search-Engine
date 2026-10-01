@@ -1,4 +1,4 @@
-"""Metadata and citation scores (spec 9), computed in SQL over the whole corpus.
+"""Metadata and citation scores, computed in SQL over the whole corpus.
 
 Usage: python -m ingest.scores
 """

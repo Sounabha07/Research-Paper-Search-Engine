@@ -1,4 +1,4 @@
-"""Threads and research runs (spec 12b, 14). Runs execute in the worker (`research_run_job`)."""
+"""Threads and research runs. Runs execute in the worker (`research_run_job`)."""
 
 from __future__ import annotations
 
@@ -331,7 +331,7 @@ async def unpin_paper(thread_id: uuid.UUID, arxiv_id: str, request: Request) -> 
 
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: uuid.UUID, request: Request) -> dict[str, str]:
-    """Spec 12: a Redis flag the worker checks between steps; a queued run is cancelled right away."""
+    """A Redis flag the worker checks between steps; a queued run is cancelled right away."""
     pool = _pool(request)
     status = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
     if status is None:
@@ -352,7 +352,7 @@ SSE_HEARTBEAT_S = 15.0
 
 @router.get("/runs/{run_id}/events")
 async def run_events(run_id: uuid.UUID, request: Request) -> StreamingResponse:
-    """Spec 14: server-sent events for a run: steps, fetch progress, and status, until the run ends."""
+    """Server-sent events for a run: steps, fetch progress, and status, until the run ends."""
     pool = _pool(request)
     status = await pool.fetchval("SELECT status FROM research_runs WHERE id = $1", run_id)
     if status is None:

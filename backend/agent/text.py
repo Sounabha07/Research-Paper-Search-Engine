@@ -1,4 +1,4 @@
-"""Answer text handling (spec 12, 12c): split WRITE output into tagged sentences, validate tags.
+"""Answer text handling: split WRITE output into tagged sentences, validate tags.
 
 Every sentence must end with source tags like [[c:123]] or [[a:2106.09685]]. Sentences come from
 segmenting on tag groups: the text before a tag group is a sentence (if it holds several sentences,
@@ -129,7 +129,7 @@ def strip_tags(text: str) -> str:
 
 
 def number_citations(existing: dict[str, int], cited_in_order: list[str]) -> dict[str, int]:
-    """Spec 12c: per-thread numbering; a paper keeps its number, new papers get the next ones."""
+    """Per-thread numbering; a paper keeps its number, new papers get the next ones."""
     numbers = dict(existing)
     nxt = max(numbers.values(), default=0) + 1
     for arxiv_id in cited_in_order:

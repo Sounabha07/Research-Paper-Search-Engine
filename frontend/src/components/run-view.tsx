@@ -138,7 +138,7 @@ const STANCES = [
   { id: "unrelated", label: "unrelated", color: "bg-muted-foreground/30" },
 ] as const;
 
-/** Consensus (spec 12, 15): for each central claim, how many of the run's papers support or contradict it. A paper
+/** Consensus: for each central claim, how many of the run's papers support or contradict it. A paper
  * counts as contradicting if any of its passages does, else supporting if any does. */
 function Consensus({ run }: { run: Run }) {
   if (!run.consensus.length) return null;

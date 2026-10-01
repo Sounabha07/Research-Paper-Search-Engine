@@ -66,7 +66,7 @@ score:
 embed:
 	$(COMPOSE) run --rm worker python -m ingest.abstract_embed
 
-# Full text on demand (milestone 3). Fetches go through the single fetcher service.
+# Full text on demand. Fetches go through the single fetcher service.
 landmarks:
 	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli landmarks
 

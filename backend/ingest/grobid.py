@@ -1,4 +1,4 @@
-"""GROBID client (spec 6.6)."""
+"""GROBID client."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-MAX_CONCURRENT = 2  # spec says 4; lowered to 2 to limit memory on the 8GB Docker VM
+MAX_CONCURRENT = 2  # limits GROBID memory on an 8GB Docker VM
 BUSY_RETRIES = 6  # GROBID answers 503 when its own pool is full; wait, don't count as a failure
 BUSY_WAIT_S = 5.0
 FORM = {

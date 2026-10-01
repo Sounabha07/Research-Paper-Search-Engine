@@ -11,9 +11,6 @@ rewrites what they do not support.
 reader, the citation graph, full text on demand, deep mode, a mathematics question, and BibTeX export. The answers in
 the video are replayed from the response cache; live answers take about 20 to 40 s and cost about $0.015.
 
-The build log, decisions, and measurements for every milestone are in [PROGRESS.md](PROGRESS.md); the full spec is
-[MASTER_PROMPT.md](MASTER_PROMPT.md).
-
 ## What it does
 
 - **Answers with checked citations.** Quick mode answers from abstracts and cached full text in ~20-30 s; deep mode
@@ -66,7 +63,7 @@ flowchart LR
     WR --> CO[CONSENSUS<br/>supports / contradicts]
 ```
 
-Retrieval (spec section 11): per query, Postgres full-text search and HNSW vector search over abstracts
+Retrieval: per query, Postgres full-text search and HNSW vector search over abstracts
 (`BAAI/bge-small-en-v1.5`, halfvec), fused with reciprocal rank fusion, plus an anchor channel over landmark and
 foundational papers; candidates are reranked with `BAAI/bge-reranker-v2-m3`, combined with a citation/metadata prior,
 and filtered by a minimum score. Passages come from the chunks of full-text papers the same way; abstract-only papers
@@ -118,7 +115,7 @@ at 03:00.
 **New papers.** The weekly job downloads the latest Kaggle arXiv snapshot (skipped when the local copy is current),
 processes only records whose `update_date` is on or after the newest one already ingested, upserts them through the
 same metadata pass as the initial load, and then runs the post-ingest steps (foundational papers, abstract
-embeddings, citation scores, PageRank). The spec's nightly OAI-PMH harvest is implemented but disabled: arXiv's OAI
+embeddings, citation scores, PageRank). A nightly OAI-PMH harvest is implemented but disabled: arXiv's OAI
 endpoint answers `ListRecords` with HTTP 406 (other verbs work), so papers newer than the latest snapshot appear with
 up to a week's delay.
 
@@ -203,7 +200,7 @@ contain, 2 garble the attribution). The claim itself is supported in 92 of 95 (9
 (94.7%). Three sentences still mention a source's status ("a peer-reviewed paper by ...") despite the prompt rule,
 and some background statements are hedged as a preprint's claim when they need no attribution.
 
-Other measured results (details in PROGRESS.md): the adversarial verifier test catches 11 of 12 altered sentences
+Other measured results: the adversarial verifier test catches 11 of 12 altered sentences
 (wrong numbers, wrong paper, merged experiments, unsupported extensions, preprint claims stated as fact) with at most
 1 of 12 originals wrongly removed; the reranker switch to bge-reranker-v2-m3 moved the paper a question is about to
 rank 1 in the A/B set.

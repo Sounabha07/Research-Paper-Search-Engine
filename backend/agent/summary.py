@@ -1,4 +1,4 @@
-"""Structured paper summaries (spec 10 `paper_summaries`, 14 `GET /papers/{id}/summary`).
+"""Structured paper summaries.
 
 Generated with llm_light on first request and cached. The input is the abstract plus, for full-text papers,
 passages from the introduction, method, experiment, and conclusion sections. A summary made from the abstract

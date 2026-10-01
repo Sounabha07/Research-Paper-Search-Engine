@@ -1,4 +1,4 @@
-"""Thread state shared by the answer pipeline and the API (spec 12b, 12c)."""
+"""Thread state shared by the answer pipeline and the API."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ async def answer_markdown(
 async def conversation_context(
     conn: asyncpg.Connection, thread_id: uuid.UUID, before_turn: int, full_turns: int
 ) -> str:
-    """Spec 12b: the running summary for older turns plus the last `full_turns` turns verbatim."""
+    """The running summary for older turns plus the last `full_turns` turns verbatim."""
     summary = await conn.fetchval("SELECT summary FROM threads WHERE id = $1", thread_id)
     runs = await conn.fetch(
         "SELECT id, turn, question FROM research_runs WHERE thread_id = $1 AND turn < $2"

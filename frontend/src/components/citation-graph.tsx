@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GraphData, GraphNode } from "@/lib/api-types";
 
 // A small force-directed layout on a canvas (repulsion, springs along edges, gravity to the center).
-// The spec names react-force-graph-2d; it could not be installed (npm registry failures), and for graphs of
+// A dependency-free layout: for graphs of
 // at most a few hundred nodes this is enough. Positions persist across expansions.
 
 type SimNode = GraphNode & { x: number; y: number; vx: number; vy: number };
@@ -84,7 +84,7 @@ function tick(nodes: SimNode[], edges: Edge[], byId: Map<string, SimNode>, alpha
 }
 
 /**
- * Citation graph (spec 15): node size = citations counted within this corpus, color = year, click a node
+ * Citation graph: node size = citations counted within this corpus, color = year, click a node
  * to expand its references and cited-by. `url` returns the initial graph (a paper's or a run's).
  */
 export function CitationGraph({ url, title }: { url: string; title?: string }) {

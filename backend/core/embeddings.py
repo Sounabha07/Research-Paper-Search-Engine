@@ -1,4 +1,4 @@
-"""Local embedding model (spec 6.8). CUDA when available, CPU fallback."""
+"""Local embedding model. CUDA when available, CPU fallback."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def abstract_text(title: str, abstract: str) -> str:
 
 
 def load_reranker(cfg: AppConfig) -> CrossEncoder:
-    """Spec 6.8: CrossEncoder scoring (query, passage) pairs. Sigmoid activation: scores in [0, 1]."""
+    """CrossEncoder scoring (query, passage) pairs. Sigmoid activation: scores in [0, 1]."""
     from sentence_transformers import CrossEncoder
 
     device = pick_device()

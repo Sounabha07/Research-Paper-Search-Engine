@@ -1,4 +1,4 @@
-"""Collections (spec 10, 14): named lists of papers and answers (runs), with BibTeX export."""
+"""Collections: named lists of papers and answers (runs), with BibTeX export."""
 
 from __future__ import annotations
 

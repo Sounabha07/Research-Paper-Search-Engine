@@ -1,4 +1,4 @@
-"""arXiv BibTeX entries (spec 12c): @misc with eprint, archivePrefix, primaryClass."""
+"""arXiv BibTeX entries: @misc with eprint, archivePrefix, primaryClass."""
 
 from __future__ import annotations
 

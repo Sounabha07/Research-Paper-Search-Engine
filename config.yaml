@@ -24,15 +24,15 @@ chunking:
 models:
   embedding: BAAI/bge-small-en-v1.5   # 384 dims
   embedding_query_prefix: "Represent this sentence for searching relevant passages: "
-  reranker: BAAI/bge-reranker-v2-m3   # A/B vs bge-reranker-base: PROGRESS.md
+  reranker: BAAI/bge-reranker-v2-m3   # chosen over bge-reranker-base in an A/B test
   llm_main: gemini-3.5-flash
   llm_light: gemini-3.5-flash-lite
-  write_model: gemini-3.5-flash-lite # WRITE; gemini-3.5-flash is the other option (comparison: PROGRESS.md)
-  write_thinking_level: minimal      # WRITE only; other calls use "low" (spec 6.7). flash accepts minimal|low|medium|high
+  write_model: gemini-3.5-flash-lite # WRITE; gemini-3.5-flash is the other option
+  write_thinking_level: minimal      # WRITE only; other calls use "low". flash accepts minimal|low|medium|high
 retrieval:
   paper_keyword_k: 100               # per query, over title + abstract
   paper_vector_k: 100
-  keyword_drop_generic: true         # drop generic question words before the AND keyword query (eval: PROGRESS.md)
+  keyword_drop_generic: true         # drop generic question words before the AND keyword query
   keyword_gate_k: 200                # keyword hits must be in the vector channel's top N for the query (0 = off)
   rerank_top_n: 50                   # merged candidates sent to the reranker
   chunk_keyword_k: 50                # within the selected papers only
@@ -77,9 +77,9 @@ arxiv:
   min_interval_s: 3.1
   user_agent: "arxiv-research-engine/0.1 (mailto:${CONTACT_EMAIL})"
 jobs:
-  oai_harvest_enabled: false         # nightly OAI-PMH harvest (spec 16). Off: arXiv's OAI ListRecords returns HTTP 406.
+  oai_harvest_enabled: false         # nightly OAI-PMH harvest. Off: arXiv's OAI ListRecords returns HTTP 406.
                                      # New papers come from the weekly Kaggle snapshot job instead (Mondays 00:30 UTC).
-feeds:                               # weekly digests (spec 16)
+feeds:                               # weekly digests
   digest_days: 7                     # papers submitted in the last N days
   top_n: 10
   min_score: 0.3                     # cross-encoder relevance (0-1) + keyword boost; bge-small similarity alone could not separate on-topic papers

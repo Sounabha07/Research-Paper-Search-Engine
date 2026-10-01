@@ -1,4 +1,4 @@
-"""arXiv OAI-PMH incremental harvest (spec 6.2, 16): parsing and record conversion.
+"""arXiv OAI-PMH incremental harvest: parsing and record conversion.
 
 The fetcher (the only process that talks to arXiv) requests the pages; this module turns a ListRecords
 response into Kaggle-shaped records, so the metadata pass (window/category filter, signals, upsert) is the

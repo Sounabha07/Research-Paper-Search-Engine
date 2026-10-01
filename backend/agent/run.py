@@ -1,6 +1,6 @@
-"""Answer pipeline (spec 12): a fixed sequence, no agent loop.
+"""Answer pipeline: a fixed sequence, no agent loop.
 
-REWRITE -> FIND_PAPERS -> [FETCH, CHAIN: deep mode, milestone 6] -> PASSAGES -> READ -> WRITE -> VERIFY
+REWRITE -> FIND_PAPERS -> [FETCH, CHAIN: deep mode] -> PASSAGES -> READ -> WRITE -> VERIFY
 -> CONSENSUS -> DONE.
 
 Every step writes a `run_steps` row and publishes to Redis `run:{id}`. The run has an overall deadline
@@ -224,7 +224,7 @@ async def verify_sentences(
     require_span: bool = True,
     name_check: bool = True,
 ) -> list[Final]:
-    """Spec 12 VERIFY: batches of verify_batch_size; partial -> rewrite once (the rewrite is re-checked and
+    """VERIFY: batches of verify_batch_size; partial -> rewrite once (the rewrite is re-checked and
     removed unless supported); unsupported -> removed.
 
     With require_span, a supported/partial verdict also needs an exact supporting excerpt from a cited
@@ -418,7 +418,7 @@ async def step_consensus(
 
 
 async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
-    """Spec 12 FETCH: queue selected papers without full text (urgent, rank order) and wait for them up to
+    """FETCH: queue selected papers without full text (urgent, rank order) and wait for them up to
     fetch_wait_s (bounded by the run deadline), streaming progress. Papers still missing use their abstract.
     Only the top deep_max_fetch selected papers are fetched; the rest use their abstract (or cached full text)."""
     deps, cfg = st.deps, st.deps.cfg
@@ -481,7 +481,7 @@ async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
 
 
 async def step_chain(st: RunState, question: str, hits: list[PaperHit]) -> list[PaperHit]:
-    """Spec 12 CHAIN (one hop): rerank the in-corpus references of the top selected papers; add up to
+    """CHAIN (one hop): rerank the in-corpus references of the top selected papers; add up to
     chain_max_added whose score reaches the lowest selected paper's. Marked via_chain with the citing paper."""
     deps, cfg = st.deps, st.deps.cfg
     top = [h.arxiv_id for h in hits[: cfg.agent.chain_from_top_papers]]
@@ -803,7 +803,7 @@ async def _store(
                 c.claim,
                 json.dumps(items),
             )
-        # Spec 12c: stable per-thread numbering, in order of first citation.
+        # Stable per-thread numbering, in order of first citation.
         cited = [by_id[t].arxiv_id for f in finals if f.verdict != "unsupported_removed" for t in f.tags]
         existing = await citation_numbers(conn, st.thread_id)
         numbers = number_citations(existing, list(dict.fromkeys(cited)))
@@ -836,7 +836,7 @@ async def _finish(deps: AgentDeps, run_id: uuid.UUID, status: str) -> None:
 
 
 async def update_summary(deps: AgentDeps, thread_id: uuid.UUID) -> None:
-    """Spec 12b: once a thread has more than thread_full_turns turns, fold the turn that just left the
+    """Once a thread has more than thread_full_turns turns, fold the turn that just left the
     verbatim window into the running summary."""
     cfg = deps.cfg
     async with deps.pool.acquire() as conn:

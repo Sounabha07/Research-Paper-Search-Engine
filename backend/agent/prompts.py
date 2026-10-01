@@ -1,4 +1,4 @@
-"""Prompts and structured-output schemas for the answer pipeline (spec 12, 12b)."""
+"""Prompts and structured-output schemas for the answer pipeline."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """arq worker entrypoint: `arq workers.arq_worker.WorkerSettings`.
 
-Full-text pipeline stages (spec 8), the pdf_tmp janitor, and batch jobs. On startup it
+Full-text pipeline stages, the pdf_tmp janitor, and batch jobs. On startup it
 re-enqueues papers left mid-pipeline, so restarts never lose or duplicate work.
 """
 
@@ -94,7 +94,7 @@ async def search_job(ctx: dict[str, Any], params: dict[str, Any]) -> dict[str, A
 
 
 async def research_run_job(ctx: dict[str, Any], run_id: str) -> str:
-    """Spec 12: one research run (quick mode in milestone 5)."""
+    """One research run (quick or deep)."""
     return await execute_run(ctx["agent"], uuid.UUID(run_id))
 
 
@@ -118,7 +118,7 @@ async def recompute_scores_job(ctx: dict[str, Any]) -> str:
 
 
 async def nightly_job(ctx: dict[str, Any]) -> str:
-    """Spec 16, 02:00 UTC: queue the OAI-PMH harvest in the fetcher (it enqueues post_harvest_job when done).
+    """02:00 UTC: queue the OAI-PMH harvest in the fetcher (it enqueues post_harvest_job when done).
     Disabled by config: arXiv refuses ListRecords; the weekly snapshot job brings new papers instead."""
     from ingest.nightly import queue_harvest
 
@@ -140,7 +140,7 @@ async def post_harvest_job(ctx: dict[str, Any]) -> str:
 
 
 async def digest_job(ctx: dict[str, Any], feed_id: str | None = None, days: int | None = None) -> Any:
-    """Spec 16, weekly (Monday 03:00 UTC): a digest for every feed. With feed_id: that feed now (API)."""
+    """Weekly (Monday 03:00 UTC): a digest for every feed. With feed_id: that feed now (API)."""
     from agent.digest import build_all, build_digest
 
     agent, models = ctx["agent"], ctx["search_models"]
@@ -168,7 +168,7 @@ async def recover(redis: ArqRedis, deps: PipelineDeps) -> None:
         n += bool(await redis.enqueue_job("resolve_refs_job", a, _job_id=f"refs:{a}"))
     if n:
         log.info("re-enqueued in-flight papers", extra={"count": n})
-    # Spec 12: runs left 'running' by a restart resume from their last completed step; queued runs whose
+    # Runs left 'running' by a restart resume from their last completed step; queued runs whose
     # job was lost are queued again (a duplicate job is harmless: execute_run holds a per-run lock).
     runs = await deps.pool.fetch("SELECT id, status FROM research_runs WHERE status IN ('queued', 'running')")
     for r in runs:

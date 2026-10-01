@@ -14,7 +14,7 @@ def collapse_ws(s: str) -> str:
 
 
 def normalize_title(title: str) -> str:
-    """Spec 6.5: lowercase, strip punctuation and whitespace. Used for `papers.title_norm`."""
+    """Lowercase, strip punctuation and whitespace. Used for `papers.title_norm`."""
     s = unicodedata.normalize("NFKC", title).lower()
     return _NON_ALNUM.sub("", s)
 

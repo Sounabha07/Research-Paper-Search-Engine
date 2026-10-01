@@ -1,4 +1,4 @@
-"""Sentence-aligned chunking (spec 5 `chunking`, 6.8).
+"""Sentence-aligned chunking.
 
 Every chunk's text is an exact slice `document_text[char_start:char_end]` of one canonical
 text built from the parsed paper, so the reader can highlight a passage by offsets.
@@ -154,5 +154,5 @@ def _overlap(group: list[Span], overlap_tokens: int) -> list[Span]:
 
 
 def embedding_input(title: str, chunk: Chunk) -> str:
-    """Spec 6.8: chunks are embedded with a header; the stored text has none."""
+    """Chunks are embedded with a header; the stored text has none."""
     return f"Title: {title} | Section: {chunk.section}\n{chunk.text}"

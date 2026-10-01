@@ -1,4 +1,4 @@
-"""PageRank over our own citation edges (spec 9). Stubs are graph nodes but store no score."""
+"""PageRank over our own citation edges. Stubs are graph nodes but store no score."""
 
 from __future__ import annotations
 

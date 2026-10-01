@@ -1,4 +1,4 @@
-"""GROBID TEI (spec 6.6): parse body text and bibliography; write TEI for the PyMuPDF fallback.
+"""GROBID TEI: parse body text and bibliography; write TEI for the PyMuPDF fallback.
 
 `parsed/{arxiv_id}.tei.xml.gz` always holds TEI, whichever parser produced it, so
 re-chunking reads one format.

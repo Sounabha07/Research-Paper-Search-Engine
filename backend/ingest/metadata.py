@@ -1,4 +1,4 @@
-"""Metadata pass (spec 6.1, 7, 9): stream Kaggle, validate landmarks, load tier 1 papers.
+"""Metadata pass: stream Kaggle, validate landmarks, load tier 1 papers.
 
 Usage: python -m ingest.metadata [--skip-download] [--dry-run]
   --dry-run   stream and print counts only, write nothing
@@ -72,7 +72,7 @@ COLUMNS = [
 
 
 def parse_v1_date(rec: dict[str, Any]) -> datetime | None:
-    """Submission date = versions[0].created (spec 6.1). Never update_date."""
+    """Submission date = versions[0].created. Never update_date."""
     versions = rec.get("versions") or []
     if not versions:
         return None

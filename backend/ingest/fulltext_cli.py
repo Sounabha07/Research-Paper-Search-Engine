@@ -41,7 +41,7 @@ async def cmd_landmarks(cfg: AppConfig) -> None:
 
 
 async def cmd_warm(cfg: AppConfig, topic: str, n: int) -> None:
-    """Spec 7: paper-level search for the topic (run by the worker, which holds the models),
+    """Paper-level search for the topic (run by the worker, which holds the models),
     then queue the top n papers that are not yet full text."""
     from arq import create_pool as create_arq_pool
     from arq.connections import RedisSettings

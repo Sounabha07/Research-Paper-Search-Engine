@@ -1,4 +1,4 @@
-"""PyMuPDF fallback parser (spec 6.6): text with font-size heading heuristics.
+"""PyMuPDF fallback parser: text with font-size heading heuristics.
 
 Used only after GROBID fails twice. References are split from the "References" section
 as raw strings; only their arXiv ids and years are extracted (no titles).

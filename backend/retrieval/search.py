@@ -1,4 +1,4 @@
-"""Hybrid retrieval (spec 11): paper selection, then passage selection within the selected papers.
+"""Hybrid retrieval: paper selection, then passage selection within the selected papers.
 
 Papers:   per query keyword top-k + vector top-k over title+abstract (with filters), RRF-fused;
           queries merged by summed RRF; top `rerank_top_n`, plus the top `anchor_k` landmark/foundational
@@ -77,7 +77,7 @@ class Filters:
     year_from: int | None = None
     year_to: int | None = None
     categories: tuple[str, ...] = ()  # exact ("cs.LG") or archive ("math") matches any category
-    restrict_ids: tuple[str, ...] = ()  # "Ask about this paper": only these papers (spec 12b)
+    restrict_ids: tuple[str, ...] = ()  # "Ask about this paper": only these papers
 
     def sql(self, first_param: int) -> tuple[str, list[Any]]:
         """SQL condition on table alias `p` and its parameters, numbered from `first_param`."""
@@ -174,7 +174,7 @@ def rrf_fuse(rankings: Sequence[Sequence[Any]], k: int) -> list[tuple[Any, float
 
 
 def merge_query_lists(fused_per_query: Sequence[Sequence[tuple[Any, float]]]) -> list[tuple[Any, float]]:
-    """Spec 11.2: merge all queries' fused lists by summed RRF score."""
+    """Merge all queries' fused lists by summed RRF score."""
     total: dict[Any, float] = defaultdict(float)
     for fused in fused_per_query:
         for doc, score in fused:
@@ -189,7 +189,7 @@ def apply_prior(
     boosts: dict[str, float] | None = None,
     min_kept: int = 0,
 ) -> list[PaperHit]:
-    """Spec 11.3: add the capped prior (and thread-carryover / name-match boosts), sort by final score, and drop
+    """Add the capped prior (and thread-carryover / name-match boosts), sort by final score, and drop
     papers below rerank_min_score while always keeping the top `min_kept`."""
     for h in hits:
         h.final_score = (
@@ -218,7 +218,7 @@ def name_matches(title: str, texts: Sequence[str]) -> bool:
 
 
 def keep_pinned(hits: list[PaperHit], selected: list[PaperHit], pinned: Sequence[str], limit: int) -> list[PaperHit]:
-    """Spec 12b: pinned papers are always selected (even below the score floor); search fills the rest."""
+    """Pinned papers are always selected (even below the score floor); search fills the rest."""
     pins = set(pinned)
     pinned_hits = [h for h in hits if h.arxiv_id in pins]
     others = [h for h in selected if h.arxiv_id not in pins]
@@ -243,12 +243,12 @@ def cap_per_paper(passages: list[Passage], max_per_paper: int, limit: int) -> li
 
 async def _set_vector_params(conn: asyncpg.Connection, cfg: AppConfig) -> None:
     await conn.execute(f"SET hnsw.ef_search = {int(cfg.retrieval.hnsw_ef_search)}")
-    await conn.execute("SET hnsw.iterative_scan = relaxed_order")  # spec 10: for filtered queries
+    await conn.execute("SET hnsw.iterative_scan = relaxed_order")  # for filtered queries
 
 
 # Question scaffolding and generic verbs/adjectives that Postgres' English stopword list keeps but that rarely appear
 # in the abstract of the paper a question is about ("How does X reduce the memory cost ...", "What are the new ...").
-# With them, the AND keyword query matched only later papers paraphrasing the question (eval, PROGRESS.md).
+# With them, the AND keyword query matched only later papers paraphrasing the question.
 GENERIC_WORDS = frozenset(
     (
         "new",
@@ -456,7 +456,7 @@ async def select_papers(
             if a not in present:
                 candidates.append((a, 0.0))
                 anchor_only.add(a)
-    # Spec 12b: papers cited earlier in the thread compete too, with a boost after reranking.
+    # Papers cited earlier in the thread compete too, with a boost after reranking.
     present = {a for a, _ in candidates}
     for a in [*carryover, *pinned]:
         if a not in present:
@@ -524,7 +524,7 @@ async def select_passages(
                 lists.append(await vector_chunks(conn, HalfVector(vec), ready, r.chunk_vector_k))
         with timings.stage("passages.fusion"):
             fused = rrf_fuse(lists, r.rrf_k)[: r.rerank_top_n]
-    # Spec 12b: chunks cited earlier in the thread can be cited again without refetching.
+    # Chunks cited earlier in the thread can be cited again without refetching.
     in_fused = {cid for cid, _ in fused}
     fused += [(cid, 0.0) for cid in reuse_chunks if cid not in in_fused]
     counts["passages.candidates"] = len(fused)
@@ -556,7 +556,7 @@ async def select_passages(
             p.rerank_score = s
         passages = chunk_passages
 
-    # Spec 11.6: selected papers without full text contribute their abstract (always kept).
+    # Selected papers without full text contribute their abstract (always kept).
     abstracts = [
         Passage(arxiv_id=p.arxiv_id, source="abstract", chunk_id=None, section="Abstract", text=p.abstract,
                 char_start=None, char_end=None, rrf=p.rrf, rerank_score=p.rerank_score)
@@ -620,7 +620,7 @@ async def search_passages(
     papers: list[PaperHit],
     reuse_chunks: Sequence[int] = (),
 ) -> tuple[list[Passage], dict[str, float], dict[str, int]]:
-    """Spec 11 steps 5-7 on their own: deep mode runs FETCH and CHAIN between paper and passage selection."""
+    """Passage selection on its own: deep mode runs FETCH and CHAIN between paper and passage selection."""
     passage_queries = list(dict.fromkeys([question, *queries]))
     timings = Timings()
     counts: dict[str, int] = defaultdict(int)

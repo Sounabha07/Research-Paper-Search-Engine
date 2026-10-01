@@ -1,4 +1,4 @@
-"""Nightly OAI-PMH harvest (spec 16) and the post-harvest steps shared with the weekly snapshot job.
+"""Nightly OAI-PMH harvest and the post-harvest steps shared with the weekly snapshot job.
 
 DISABLED by default (`jobs.oai_harvest_enabled: false`): arXiv's OAI endpoint answers ListRecords with HTTP 406
 (Identify, ListSets and ListMetadataFormats work). New papers come from the weekly Kaggle snapshot job
@@ -54,7 +54,7 @@ async def queue_harvest(redis: Redis) -> str | None:
 
 async def update_foundational(conn: asyncpg.Connection, cfg: AppConfig) -> dict[str, int]:
     """Foundational = cs/math papers older than the window, cited by at least foundational_min_fulltext_citations
-    full-text papers (spec 7). New ones only known from reference lookups ('discovered') join the pipeline."""
+    full-text papers. New ones only known from reference lookups ('discovered') join the pipeline."""
     cutoff = window_cutoff(cfg.corpus.years_back)
     n = cfg.corpus.foundational_min_fulltext_citations
     patterns = [f"{p}%" for p in cfg.corpus.categories_prefixes]

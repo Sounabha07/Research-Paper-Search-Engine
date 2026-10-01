@@ -1,4 +1,4 @@
-"""Feed digests (spec 10 `feeds`/`digests`, 16 weekly): new papers matched to a feed by embedding similarity
+"""Feed digests: new papers matched to a feed by embedding similarity
 to its query plus keywords, summarized with llm_light.
 
 Candidates are papers submitted in the last `feeds.digest_days`: the nearest by abstract embedding, and any whose
