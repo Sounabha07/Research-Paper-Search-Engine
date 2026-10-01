@@ -110,6 +110,20 @@ def _parse_paragraph(para: str, section: str, allowed: set[str]) -> list[DraftSe
     return out
 
 
+# Source status labels are instructions for WRITE and VERIFY, not wording; the writer sometimes copies them anyway
+# ("Gu's landmark paper", "a peer-reviewed paper by Lee", "the Su et al. landmark papers").
+_STATUS_LABEL = re.compile(
+    r"\b(?:landmark|foundational|peer[- ]reviewed)\s+"
+    r"(?=(?:papers?|works?|stud(?:y|ies)|articles?|publications?)\b)",
+    re.IGNORECASE,
+)
+
+
+def drop_status_labels(text: str) -> str:
+    """Remove status labels used as adjectives ("landmark paper" -> "paper"). "preprint" attributions stay."""
+    return _STATUS_LABEL.sub("", text)
+
+
 def strip_tags(text: str) -> str:
     return " ".join(TAG_GROUP.sub("", text).split())
 

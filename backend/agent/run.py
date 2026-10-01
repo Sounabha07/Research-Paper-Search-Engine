@@ -25,7 +25,7 @@ import asyncpg
 from redis.asyncio import Redis
 
 from agent import prompts
-from agent.text import DraftSentence, number_citations, parse_answer, source_id, strip_tags
+from agent.text import DraftSentence, drop_status_labels, number_citations, parse_answer, source_id, strip_tags
 from agent.threads import answer_markdown, citation_numbers, conversation_context, thread_cited
 from agent.verify import SourceText, altered_math, find_span, missing_names
 from core.config import AppConfig
@@ -772,7 +772,17 @@ async def _store(
         await conn.execute("DELETE FROM answer_sentences WHERE run_id = $1", st.run_id)
         await conn.executemany(
             "INSERT INTO answer_sentences (run_id, seq, section, text, verdict, sources) VALUES ($1,$2,$3,$4,$5,$6)",
-            [(st.run_id, f.seq, f.section, f.text, f.verdict, json.dumps([src(t, f) for t in f.tags])) for f in finals],
+            [
+                (
+                    st.run_id,
+                    f.seq,
+                    f.section,
+                    drop_status_labels(f.text),
+                    f.verdict,
+                    json.dumps([src(t, f) for t in f.tags]),
+                )
+                for f in finals
+            ],
         )
         await conn.execute("DELETE FROM evidence_notes WHERE run_id = $1", st.run_id)
         await conn.executemany(

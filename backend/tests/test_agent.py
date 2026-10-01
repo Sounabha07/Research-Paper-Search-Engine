@@ -328,3 +328,21 @@ def test_chunk_style_arxiv_tags_are_repaired() -> None:
         (["a:2604.00479"], [], ["c:2604.00479->a:2604.00479"]),
         (["c:18308"], ["c:1865.05165"], []),
     ]
+
+
+def test_drop_status_labels() -> None:
+    from agent.text import drop_status_labels
+
+    assert drop_status_labels("Gu's landmark paper shows X. [[c:1]]") == "Gu's paper shows X. [[c:1]]"
+    assert (
+        drop_status_labels("Lee et al. state in a peer-reviewed paper that Y.") == "Lee et al. state in a paper that Y."
+    )
+    assert (
+        drop_status_labels("According to the Su et al. landmark papers, Z.") == "According to the Su et al. papers, Z."
+    )
+    assert drop_status_labels("as shown in peer-reviewed work by Merullo") == "as shown in work by Merullo"
+    assert (
+        drop_status_labels("A 2022 preprint by Fukuyama claims a proof.")
+        == "A 2022 preprint by Fukuyama claims a proof."
+    )
+    assert drop_status_labels("a landmark result in landmark detection") == "a landmark result in landmark detection"
