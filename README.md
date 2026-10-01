@@ -173,14 +173,27 @@ Both changes together fix two questions (Transformer, Self-RAG) with no regressi
 cost (the gate reuses the vector query, which now fetches 200 instead of 100). Settings:
 `retrieval.keyword_drop_generic`, `retrieval.keyword_gate_k`.
 
-| answers | quick p50 / max | deep | cost per answer | removed claims | citation precision (manual, 55 pairs) |
-|---|---|---|---|---|---|
-| 6 of 40 (free-tier daily quota reached) | 16 s / 51 s | 111 s (1 run) | $0.013 | 1.8% | 55/55 supported by the cited passage; 2 imprecise attributions |
+**Answers** (all 40 questions through the full pipeline, including the LLM rewrite, on the production configuration;
+answers written by gemini-3.5-flash-lite):
 
-The answer run stopped being meaningful after 6 questions: gemini-3.5-flash-lite's free tier allows 500 requests a
-day and the full run needs about 350, on a day when earlier tests had already used most of the quota. The remaining
-34 questions can be run after the daily reset (`make eval ARGS="--answers --ids 7,8,..."`); completed answers come
-from the response cache.
+| | quick (30) | deep (10) |
+|---|---|---|
+| latency p50 / p95 | 24 s / 43 s | 54 s / 103 s |
+| timed out | 0 | 0 |
+
+| cost per answer | claims removed by the verifier | writer fallbacks | selected papers: recall@10 | answers citing an expected paper |
+|---|---|---|---|---|
+| $0.014 | 54 of 379 sentences (14.2%) | 0 | 0.600 | 28 of 40 |
+
+Removed claims by reason: no exact supporting span 26, writer tagging errors 16 (8 sentences without a source tag,
+8 with a malformed tag such as `[[c:2604.00479]]` for the abstract `[[a:2604.00479]]`), rewrite failed its re-check
+7, named term not in the source 3, unsupported 2.
+
+**Citation precision** (95 random (sentence, cited passage) pairs, checked by hand): 90 fully supported and correctly
+attributed; 1 wrong (it reverses which paper generalizes which); 4 imprecise (2 add a detail the passage does not
+contain, 2 garble the attribution). The claim itself is supported in 92 of 95 (96.8%); strict precision 90 of 95
+(94.7%). Three sentences still mention a source's status ("a peer-reviewed paper by ...") despite the prompt rule,
+and some background statements are hedged as a preprint's claim when they need no attribution.
 
 Other measured results (details in PROGRESS.md): the adversarial verifier test catches 11 of 12 altered sentences
 (wrong numbers, wrong paper, merged experiments, unsupported extensions, preprint claims stated as fact) with at most
@@ -201,8 +214,11 @@ rank 1 in the A/B set.
   claims get attributed ("a 2023 preprint by ... reports"). Landmark and foundational papers are never treated as
   preprints. The verifier also sometimes hedges background statements that need no attribution.
 - **Free-tier Gemini.** gemini-3.5-flash allows 20 requests a day and flash-lite 500, so answers are written by
-  flash-lite, a busy day runs out (about 60 quick answers a day), and a model's 503/429 falls back to flash-lite
-  (shown on the answer). The rate limiter keeps requests under the per-minute limits but cannot add daily quota.
+  flash-lite, and a model's 503/429 falls back to flash-lite (shown on the answer). An answer takes ~7 flash-lite
+  requests; a hard cap of 450 a day (`llm_client.daily_caps`, counted across the app and the eval scripts) leaves
+  room for about 60 answers a day. Cached answers cost nothing.
+- **Writer tagging errors.** flash-lite sometimes cites an abstract with a chunk-style tag (`[[c:2604.00479]]`) or
+  garbles an id; such sentences are removed even when the claim is right (16 of the 54 removals in the eval).
 - **Reranker saturation.** On a popular topic the cross-encoder gives dozens of newer papers that discuss the topic
   scores of ~0.99, the same as or above the paper the question is about, and the citation prior adds only ~0.01-0.05,
   so the original drops out of the top 10 even though it is among the candidates. Examples: "How does grouped-query

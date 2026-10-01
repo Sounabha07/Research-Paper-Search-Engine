@@ -9,7 +9,7 @@ Milestones from MASTER_PROMPT.md section 21. Each one stops for approval before 
 - [x] 5. **Quick answers**: quick mode end to end with verification, threads with follow-ups and running summary, stable citation numbering, chips with hover and click-through to the reader, source list, BibTeX export.
 - [x] 6. **Deep mode**: FETCH step with on-demand full text, CHAIN step, pinned papers, live progress over SSE, timeouts, cancel, resume, follow-ups.
 - [x] 7. **Exploration**: paper page, summaries, citation graph, consensus view, collections with BibTeX.
-- [ ] 8. **Feeds, nightly jobs, eval, README**: digests, OAI-PMH nightly, eval suite with ablations, README with architecture diagram, setup, and eval results table (leave a placeholder for the demo video).
+- [x] 8. **Feeds, nightly jobs, eval, README**: digests, OAI-PMH nightly, eval suite with ablations, README with architecture diagram, setup, and eval results table (leave a placeholder for the demo video).
 
 ## Notes
 
@@ -446,7 +446,7 @@ Preprint wording
 - 50 real sentences: 44 supported, 3 rewritten, 3 removed (previous rule: 27 / 20 / 3). One rewrite attributes QLoRA's
   "first method ..." to "a 2024 preprint": QLoRA has no venue in the metadata, so it counts as a preprint.
 
-### Milestone 8 (in progress 2026-09-30: built; full eval waits for approval of the question list)
+### Milestone 8 (done 2026-10-01)
 Nightly job (spec 16)
 - Worker cron 02:00 UTC `nightly_job` queues an OAI-PMH harvest (`cs`, `math`) at the front of the fetcher's bulk
   queue; the fetcher (the only arXiv client) pages through ListRecords at 1 request / 3.1 s, handles urgent PDF
@@ -568,3 +568,47 @@ Jobs
 - GROBID mem_limit 5g.
 
 README: results tables, tag breakdown, keyword finding, partial answer results, Known limitations section, weekly job.
+
+### Milestone 8, final (2026-10-01)
+Keyword channel fix (retrieval eval only, no Gemini; results/20261001T025850Z)
+  | variant | recall@10 | MRR | passage hit@10 | p50 | p95 |
+  | baseline (all words AND) | 0.588 | 0.577 | 0.650 | 2400 ms | 3754 ms |
+  | a. generic question words dropped | 0.613 | 0.602 | 0.675 | 1574 ms | 2535 ms |
+  | b. keyword hits gated by vector top 200 | 0.613 | 0.581 | 0.700 | 1666 ms | 2290 ms |
+  | a + b | 0.637 | 0.605 | 0.725 | 1616 ms | 2199 ms |
+  By tag (recall / MRR), baseline -> a+b: landmark=false 0.50/0.41 -> 0.56/0.47; landmark=true 0.65/0.70 -> 0.70/0.70;
+  named=true 0.63/0.58 -> 0.70/0.62; named=false unchanged 0.50/0.58; cs 0.64/0.66 -> 0.70/0.70; math unchanged
+  0.38/0.23; quick 0.62/0.58 -> 0.68/0.62; deep unchanged 0.50/0.56.
+  a fixes #28 (Self-RAG), b fixes #1 (Transformer), a+b both; no question got worse. Adopted a+b
+  (`retrieval.keyword_drop_generic`, `retrieval.keyword_gate_k: 200`; the vector query now fetches 200 and uses the first
+  100 as before). Production rerun (results/20261001T030827Z, 031314Z): baseline 0.637 / 0.605 / 0.725, no-keyword
+  0.613 / 0.582, no-vector (gate off for that ablation) 0.525 / 0.533, no-rerank 0.562 / 0.472.
+- Reranker saturation documented as a known limitation (GQA, diagonal Ramsey); not tuned.
+
+Quota safety
+- Every eval/benchmark script now creates its LLM client with the shared Redis rate limiter and daily counter
+  (verifier tests and the WRITE benchmark with `use_cache=False`, so they still get fresh answers).
+- `llm_client.daily_caps: {gemini-3.5-flash-lite: 450}`: a request beyond the cap is refused before it is sent
+  (LLMQuotaExhausted; on the main model it falls back to flash-lite). Tested.
+
+Answer eval, all 40 questions, one configuration (results/20261001T105555Z; uncached timings from 20261001T070707Z)
+- The first run (07:07 UTC) completed 27 answers; the host then slept from ~07:26 to 10:32 UTC (DNS failed inside the
+  containers on wake), so #28 and #29 failed and the early stop skipped #30-40. Docker Desktop had also stopped
+  overnight and was restarted. The full set was rerun at 10:55 with the machine kept awake: #1-27 came from the
+  response cache (identical answers, no quota), #28-40 ran fresh. Flash-lite requests that day: 280 of 450.
+- Quick p50 24 s / p95 43 s; deep p50 54 s / p95 103 s; 0 timed out; $0.014 per answer; 0 writer fallbacks;
+  selected-paper recall@10 0.600; 28/40 answers cite an expected paper.
+- Removed claims 54 / 379 sentences (14.2%; the 6-answer run of 2026-09-30 had 1.8%): no valid span 26, invalid
+  source tag 8, no source tag 8, rewrite not supported 7, names not in source 3, unsupported 2. The tag errors are
+  flash-lite writing `[[c:<arxiv id>]]` for an abstract (`[[a:<id>]]`) or a garbled id (`c:1865.05165` for
+  a:2602.05165), plus untagged transition sentences. Proposed (not applied, to keep one configuration for the eval):
+  map `c:<arxiv id>` to `a:<id>` when that abstract is among the passages; the sentence still goes through VERIFY.
+- Citation sample (95 pairs, checked by hand): 90 supported and correctly attributed; 1 wrong (#29: says Campos et al.
+  generalize lower bounds, the source says it generalizes Campos et al.); 4 imprecise (#30 adds "a hierarchy of
+  denoising autoencoders", #80 adds "top-layer hidden states", #33 and #64 garble who did what). Claim supported
+  92/95 (96.8%), strict 90/95 (94.7%). "peer-reviewed" still appears as a status word in 3 sentences (#4, #33, #62)
+  despite the prompt rule; "landmark" no longer does.
+
+README: final retrieval and answer tables, keyword experiment, citation precision, known limitations (math not
+compared exactly, verifier can miss claims combining two sources, preprint detection depends on arXiv metadata,
+free-tier Gemini, writer tagging errors, reranker saturation, weekly new papers, in-corpus citation counts).
