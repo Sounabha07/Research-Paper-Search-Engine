@@ -18,6 +18,7 @@ from core.config import get_config
 from core.db import raw_connection
 from core.llm import LLMClient
 from core.logging import setup_logging
+from core.redis import get_redis
 
 
 async def main() -> None:
@@ -27,7 +28,7 @@ async def main() -> None:
     args = parser.parse_args()
     setup_logging("WARNING")
     cfg = get_config()
-    llm = LLMClient(cfg)  # no cache
+    llm = LLMClient(cfg, redis=get_redis(), use_cache=False)  # timing: no cache
     conn = await raw_connection()
     prompts_by_run = {}
     try:

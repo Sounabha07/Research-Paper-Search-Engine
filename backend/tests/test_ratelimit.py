@@ -47,3 +47,38 @@ def test_quota_value_from_error_text() -> None:
     err = RuntimeError("429 RESOURCE_EXHAUSTED ... 'quotaMetric': '...requests', 'quotaValue': '1000' ...")
     assert quota_value(err) == 1000
     assert quota_value(RuntimeError("503 overloaded")) is None
+
+
+class CounterRedis:
+    def __init__(self) -> None:
+        self.data: dict[str, int] = {}
+
+    async def incr(self, key: str) -> int:
+        self.data[key] = self.data.get(key, 0) + 1
+        return self.data[key]
+
+    async def decr(self, key: str) -> int:
+        self.data[key] -= 1
+        return self.data[key]
+
+    async def expire(self, key: str, seconds: int) -> None:
+        return None
+
+    async def get(self, key: str) -> str | None:
+        return str(self.data[key]) if key in self.data else None
+
+
+async def test_daily_cap_refuses_without_counting() -> None:
+    import pytest
+
+    from core.ratelimit import DailyCapReached
+
+    clock = FakeClock()
+    redis = CounterRedis()
+    rl = RateLimiter({}, redis, {"lite": 2}, clock=clock, sleep=clock.sleep)  # type: ignore[arg-type]
+    await rl.acquire("lite")
+    await rl.acquire("lite")
+    with pytest.raises(DailyCapReached, match="daily cap of 2"):
+        await rl.acquire("lite")
+    assert await rl.used_today("lite") == 2  # the refused request is not counted
+    assert await rl.acquire("other") == 0.0  # no cap for other models

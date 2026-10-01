@@ -22,6 +22,8 @@ from core.config import get_config
 from core.db import raw_connection
 from core.llm import LLMClient
 from core.logging import setup_logging
+from core.redis import get_redis
+
 from verifier_adversarial import paper_meta  # same directory
 
 
@@ -63,7 +65,9 @@ async def main() -> None:
     if not args.no_status:  # the pipeline passes each source's status (preprint / venue / landmark) to VERIFY
         meta = await paper_meta(set(sources))
         sources = {k: replace(v, status=meta[k][0], authors=meta[k][1]) if k in meta else v for k, v in sources.items()}
-    finals = await verify_sentences(LLMClient(cfg), cfg, drafts, sources, None, True, not args.no_names)
+    finals = await verify_sentences(
+        LLMClient(cfg, redis=get_redis(), use_cache=False), cfg, drafts, sources, None, True, not args.no_names
+    )
     verdicts = Counter(f.verdict for f in finals)
     print(f"{len(finals)} previously kept sentences -> {dict(verdicts)}")
     for f in finals:

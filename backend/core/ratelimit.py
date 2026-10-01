@@ -3,7 +3,9 @@
 Every process (api, worker, eval scripts) takes a slot from one sliding 60 s window per model in Redis before
 calling the API, so the combined rate stays under the limit instead of relying on 429 retries. Cache hits do
 not take a slot. Without Redis (tests), a per-process window is used.
-A per-model daily counter (Pacific-time day, as Google counts it) is kept for reporting.
+A per-model daily counter (Pacific-time day, as Google counts it) is kept in Redis; with a daily cap for the model,
+a request beyond the cap raises DailyCapReached before it is sent (a margin under the free-tier quota, so a long
+eval cannot use up the day's quota for the app).
 """
 
 from __future__ import annotations
@@ -36,6 +38,10 @@ return tostring(tonumber(oldest[2]) + window - now)
 """
 
 
+class DailyCapReached(RuntimeError):
+    """The configured daily request cap for a model is reached."""
+
+
 def day_key(model: str, now: float | None = None) -> str:
     day = datetime.fromtimestamp(now if now is not None else time.time(), PACIFIC).strftime("%Y-%m-%d")
     return f"llm:rpd:{model}:{day}"
@@ -46,10 +52,12 @@ class RateLimiter:
         self,
         limits: Mapping[str, int],
         redis: Redis | None = None,
+        daily_caps: Mapping[str, int] | None = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.limits = dict(limits)
+        self.daily_caps = dict(daily_caps or {})
         self._redis = redis
         self._clock = clock
         self._sleep = sleep
@@ -73,8 +81,21 @@ class RateLimiter:
             return 0.0
         return q[0] + WINDOW_S - now
 
+    async def _count_today(self, model: str) -> None:
+        """Count this request in the model's daily counter; refuse it if that passes the daily cap."""
+        if self._redis is None:
+            return
+        key = day_key(model, self._clock())
+        n = int(await self._redis.incr(key))
+        await self._redis.expire(key, 3 * 86400)
+        cap = self.daily_caps.get(model)
+        if cap is not None and n > cap:
+            await self._redis.decr(key)  # not sent: do not count it
+            raise DailyCapReached(f"{model}: daily cap of {cap} requests reached (llm_client.daily_caps)")
+
     async def acquire(self, model: str) -> float:
         """Wait until a request to `model` is allowed; returns the time waited. Unlisted models are not limited."""
+        await self._count_today(model)
         limit = self.limits.get(model)
         if not limit:
             return 0.0
@@ -88,10 +109,6 @@ class RateLimiter:
                 waited += wait
                 await self._sleep(wait)
         self.waited_s += waited
-        if self._redis is not None:
-            key = day_key(model, self._clock())
-            await self._redis.incr(key)
-            await self._redis.expire(key, 3 * 86400)
         return waited
 
     async def used_today(self, model: str) -> int:

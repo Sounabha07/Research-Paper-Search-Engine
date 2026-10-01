@@ -29,7 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import AppConfig, ConfigError, get_config, require_env
-from core.ratelimit import RateLimiter
+from core.ratelimit import DailyCapReached, RateLimiter
 
 log = logging.getLogger(__name__)
 
@@ -151,14 +151,16 @@ class LLMClient:
         redis: Redis | None = None,
         call_logger: CallLogger | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        use_cache: bool = True,
     ) -> None:
         self.cfg = cfg
+        self._use_cache = use_cache  # False: fresh answers (verifier tests), still rate-limited and counted
         self._client = client or genai.Client(api_key=require_env("GEMINI_API_KEY"))
         self._redis = redis
         self._call_logger = call_logger
         self._sleep = sleep
         self._sem = asyncio.Semaphore(cfg.llm_client.max_concurrency)
-        self.limiter = RateLimiter(cfg.llm_client.rpm_limits, redis, sleep=sleep)
+        self.limiter = RateLimiter(cfg.llm_client.rpm_limits, redis, cfg.llm_client.daily_caps, sleep=sleep)
         self._no_thinking: set[str] = set()
         self._warned_no_price: set[str] = set()
 
@@ -284,7 +286,13 @@ class LLMClient:
         overloaded = 0
         while True:
             config = self._build_config(model, temperature, max_output_tokens, schema, thinking_level)
-            waited = await self.limiter.acquire(model)  # stay under the free-tier requests per minute
+            try:  # stay under the free-tier requests per minute and the daily cap
+                waited = await self.limiter.acquire(model)
+            except DailyCapReached as e:
+                if model == self.cfg.models.llm_main and self.cfg.models.llm_light != model:
+                    model = self.cfg.models.llm_light
+                    continue
+                raise LLMQuotaExhausted(str(e)) from e
             if waited > 1:
                 log.info("llm rate limit wait", extra={"model": model, "waited_s": round(waited, 1)})
             start = time.perf_counter()
@@ -386,7 +394,7 @@ class LLMClient:
         return CACHE_PREFIX + hashlib.sha256(blob.encode()).hexdigest()
 
     async def _cache_get(self, key: str) -> str | None:
-        if self._redis is None:
+        if self._redis is None or not self._use_cache:
             return None
         try:
             value = await self._redis.get(key)
@@ -398,7 +406,7 @@ class LLMClient:
         return value.decode() if isinstance(value, bytes) else str(value)
 
     async def _cache_set(self, key: str, value: str) -> None:
-        if self._redis is None:
+        if self._redis is None or not self._use_cache:
             return
         try:
             await self._redis.set(key, value, ex=self.cfg.llm_client.cache_ttl_days * 86400)

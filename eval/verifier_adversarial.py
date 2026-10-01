@@ -27,6 +27,7 @@ from core.config import get_config
 from core.db import raw_connection
 from core.llm import LLMClient
 from core.logging import setup_logging
+from core.redis import get_redis
 
 CASES = Path(__file__).with_name("verifier_adversarial.yaml")
 
@@ -79,7 +80,7 @@ async def verify(
     meta: dict[str, tuple[str, str]] | None = None,
 ) -> list[Any]:  # fmt: skip
     cfg = get_config()
-    llm = LLMClient(cfg)  # no cache, no DB logging: fresh verdicts every run
+    llm = LLMClient(cfg, redis=get_redis(), use_cache=False)  # fresh verdicts; shared rate limit + daily count
     from agent import run
 
     if hasattr(run, "verify_sentences"):

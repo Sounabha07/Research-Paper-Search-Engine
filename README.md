@@ -141,25 +141,37 @@ make eval ARGS="--answers"                             # answer pipeline, cached
 
 ### Results
 
-Eval of 2026-09-30, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
+Eval of 2026-10-01, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
 (no LLM rewrite), so these numbers are retrieval alone.
 
 | variant | recall@10 | MRR | passage hit@10 | latency p50 | latency p95 |
 |---|---|---|---|---|---|
-| baseline (keyword + vector + anchors, reranked) | 0.588 | 0.577 | 0.650 | 2.2 s | 3.4 s |
-| no keyword | 0.613 | 0.582 | 0.700 | 2.0 s | 2.5 s |
-| no vector | 0.512 | 0.513 | 0.300 | 0.3 s | 1.5 s |
-| no rerank | 0.487 | 0.383 | 0.550 | 0.3 s | 0.8 s |
+| **production** (keyword + vector + anchors, reranked) | **0.637** | **0.605** | **0.725** | 1.9-2.3 s | 2.6-3.5 s |
+| no keyword | 0.613 | 0.582 | 0.700 | 1.8 s | 2.3 s |
+| no vector | 0.525 | 0.533 | 0.325 | 0.3 s | 1.3 s |
+| no rerank | 0.562 | 0.472 | 0.625 | 0.1 s | 0.2 s |
 
-Recall@10 / MRR by question tag (baseline): landmark paper expected 0.65 / 0.70 (23 questions) vs not 0.50 / 0.41
-(17); named in the question 0.63 / 0.58 (27) vs described only 0.50 / 0.58 (13); cs 0.64 / 0.66 (32) vs math
-0.38 / 0.23 (8); quick 0.62 / 0.58 (30) vs deep 0.50 / 0.56 (10). Without the vector channel, recall on questions
-without a landmark drops to 0.18; the reranker is the largest single contributor to MRR.
+Recall@10 / MRR by question tag (production): landmark paper expected 0.70 / 0.70 (23 questions) vs not 0.56 / 0.47
+(17); named in the question 0.70 / 0.62 (27) vs described only 0.50 / 0.58 (13); cs 0.70 / 0.70 (32) vs math
+0.38 / 0.23 (8); quick 0.68 / 0.62 (30) vs deep 0.50 / 0.56 (10). The vector channel matters most for questions
+without a landmark paper (0.26 recall without it); the reranker is the largest contributor to MRR.
 
-The keyword channel's net effect is one question: its strict all-words query returned later papers that paraphrase
-the question and pushed "Attention Is All You Need" out of the top 10 (details in PROGRESS.md). The more common
-failure is different: the expected paper is among the candidates, but the cross-encoder scores dozens of newer papers
-on the same topic higher than the original (e.g. diagonal Ramsey, grouped-query attention).
+**Keyword channel fix.** The first full eval had the keyword channel slightly hurting recall (0.588 with it, 0.613
+without). Its query ANDs every question word, so generic words ("new", "reduce", "replace", "cost") limited it to a few
+later papers that paraphrase the question, which then crowded out the original paper (e.g. "Attention Is All You
+Need"). Tested on all 40 questions:
+
+| keyword variant | recall@10 | MRR | passage hit@10 | p50 | p95 |
+|---|---|---|---|---|---|
+| all words (before) | 0.588 | 0.577 | 0.650 | 2.4 s | 3.8 s |
+| generic question words removed | 0.613 | 0.602 | 0.675 | 1.6 s | 2.5 s |
+| hits kept only if in the vector channel's top 200 | 0.613 | 0.581 | 0.700 | 1.7 s | 2.3 s |
+| both (adopted) | 0.637 | 0.605 | 0.725 | 1.6 s | 2.2 s |
+| any word, ranked by overlap | 0.613 | 0.573 | 0.700 | 13.6 s | 25.0 s |
+
+Both changes together fix two questions (Transformer, Self-RAG) with no regressions on the other 38 and no latency
+cost (the gate reuses the vector query, which now fetches 200 instead of 100). Settings:
+`retrieval.keyword_drop_generic`, `retrieval.keyword_gate_k`.
 
 | answers | quick p50 / max | deep | cost per answer | removed claims | citation precision (manual, 55 pairs) |
 |---|---|---|---|---|---|
@@ -191,8 +203,14 @@ rank 1 in the A/B set.
 - **Free-tier Gemini.** gemini-3.5-flash allows 20 requests a day and flash-lite 500, so answers are written by
   flash-lite, a busy day runs out (about 60 quick answers a day), and a model's 503/429 falls back to flash-lite
   (shown on the answer). The rate limiter keeps requests under the per-minute limits but cannot add daily quota.
-- **Retrieval favors papers that match the question's wording** over the original paper on a topic when many newer
-  papers discuss it; math recall is lower (0.38 recall@10 on 8 questions).
+- **Reranker saturation.** On a popular topic the cross-encoder gives dozens of newer papers that discuss the topic
+  scores of ~0.99, the same as or above the paper the question is about, and the citation prior adds only ~0.01-0.05,
+  so the original drops out of the top 10 even though it is among the candidates. Examples: "How does grouped-query
+  attention reduce the memory cost of decoding?" (the GQA paper is a candidate at fused rank 7; "Grouped Value
+  Attention", "GTA" and other 2025-26 papers score 0.92-0.998 above it) and "What are the new upper bounds for
+  diagonal Ramsey numbers?" (the 2023 breakthrough is a candidate at fused rank 15; papers on multicolor, poset and
+  small Ramsey numbers score 0.97-0.995). Not tuned for: a fix would trade recall on originals against recent work.
+  Math recall is lower overall (0.38 recall@10 on 8 questions).
 - **New papers arrive weekly**, from the Kaggle snapshot; arXiv's OAI-PMH `ListRecords` returns HTTP 406, so the
   nightly harvest is disabled.
 - **Citation counts are within this corpus** (edges come only from papers whose full text was parsed here).

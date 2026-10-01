@@ -56,6 +56,8 @@ class ModelsConfig(_Section):
 class RetrievalConfig(_Section):
     paper_keyword_k: int
     paper_vector_k: int
+    keyword_drop_generic: bool = True
+    keyword_gate_k: int = 200
     rerank_top_n: int
     chunk_keyword_k: int
     chunk_vector_k: int
@@ -92,6 +94,7 @@ class LLMClientConfig(_Section):
     retries: int
     fallback_after_503_retries: int
     rpm_limits: dict[str, int] = {}
+    daily_caps: dict[str, int] = {}
     backoff_base_s: float
     backoff_max_s: float
     cache_ttl_days: int

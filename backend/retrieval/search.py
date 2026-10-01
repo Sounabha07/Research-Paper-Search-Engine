@@ -246,6 +246,99 @@ async def _set_vector_params(conn: asyncpg.Connection, cfg: AppConfig) -> None:
     await conn.execute("SET hnsw.iterative_scan = relaxed_order")  # spec 10: for filtered queries
 
 
+# Question scaffolding and generic verbs/adjectives that Postgres' English stopword list keeps but that rarely appear
+# in the abstract of the paper a question is about ("How does X reduce the memory cost ...", "What are the new ...").
+# With them, the AND keyword query matched only later papers paraphrasing the question (eval, PROGRESS.md).
+GENERIC_WORDS = frozenset(
+    (
+        "new",
+        "recent",
+        "main",
+        "known",
+        "best",
+        "better",
+        "effective",
+        "effectively",
+        "use",
+        "used",
+        "using",
+        "uses",
+        "make",
+        "makes",
+        "made",
+        "work",
+        "works",
+        "working",
+        "way",
+        "ways",
+        "approach",
+        "approaches",
+        "method",
+        "methods",
+        "technique",
+        "techniques",
+        "replace",
+        "replaces",
+        "reduce",
+        "reduces",
+        "improve",
+        "improves",
+        "improving",
+        "handle",
+        "handles",
+        "achieve",
+        "achieves",
+        "compare",
+        "compared",
+        "comparison",
+        "relative",
+        "decide",
+        "explain",
+        "describe",
+        "help",
+        "helps",
+        "allow",
+        "allows",
+        "enable",
+        "enables",
+        "provide",
+        "provides",
+        "cost",
+        "costs",
+        "without",
+        "instead",
+        "rather",
+        "still",
+        "also",
+        "much",
+        "many",
+        "more",
+        "less",
+        "every",
+        "each",
+        "some",
+        "whether",
+        "prove",
+        "proved",
+        "result",
+        "results",
+    )
+)
+_WORD = re.compile(r"[\w'-]+")
+
+
+def strip_generic(query: str) -> str:
+    """The query without GENERIC_WORDS (the keyword channel still ANDs the remaining terms)."""
+    kept = [w for w in _WORD.findall(query) if w.lower() not in GENERIC_WORDS]
+    return " ".join(kept) or query
+
+
+def gate_keyword_hits(keyword: Sequence[str], vector_top: Sequence[str]) -> list[str]:
+    """Keyword hits that the vector channel also ranks in its top keyword_gate_k, in keyword order."""
+    allowed = set(vector_top)
+    return [a for a in keyword if a in allowed]
+
+
 async def keyword_papers(conn: asyncpg.Connection, query: str, filters: Filters, k: int) -> list[str]:
     cond, params = filters.sql(3)
     rows = await conn.fetch(
@@ -334,9 +427,16 @@ async def select_papers(
     fused_per_query = []
     for q, vec in zip(queries, vectors, strict=True):
         with timings.stage("papers.keyword"):
-            kw = await keyword_papers(conn, q, filters, r.paper_keyword_k)
+            kw = await keyword_papers(
+                conn, strip_generic(q) if r.keyword_drop_generic else q, filters, r.paper_keyword_k
+            )
         with timings.stage("papers.vector"):
-            vc = await vector_papers(conn, HalfVector(vec), filters, r.paper_vector_k)
+            vc_top = await vector_papers(conn, HalfVector(vec), filters, max(r.paper_vector_k, r.keyword_gate_k))
+        vc = vc_top[: r.paper_vector_k]
+        if r.keyword_gate_k:  # keyword hits must also be near the query in embedding space
+            counts["papers.keyword_gated_out"] += len(kw)
+            kw = gate_keyword_hits(kw, vc_top[: r.keyword_gate_k])
+            counts["papers.keyword_gated_out"] -= len(kw)
         counts["papers.keyword_hits"] += len(kw)
         counts["papers.vector_hits"] += len(vc)
         with timings.stage("papers.fusion"):

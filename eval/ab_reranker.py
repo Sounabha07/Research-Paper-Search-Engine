@@ -1,6 +1,6 @@
 """A/B two cross-encoder rerankers on the same questions (full section-11 search, only the reranker differs).
 
-  python /app/eval/ab_reranker.py [--models BAAI/bge-reranker-base,BAAI/bge-reranker-v2-m3] [--out ab.json]
+python /app/eval/ab_reranker.py [--models BAAI/bge-reranker-base,BAAI/bge-reranker-v2-m3] [--out ab.json]
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import time
 from pathlib import Path
 
 import torch
-
 from core.config import get_config
 from core.db import create_pool
 from core.embeddings import RERANK_MAX_TOKENS, load_embedder

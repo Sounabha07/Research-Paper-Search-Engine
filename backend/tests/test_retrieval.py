@@ -106,3 +106,13 @@ def test_restrict_filter() -> None:
     cond, params = Filters(categories=("cs.LG",), restrict_ids=("2106.09685", "2305.14314")).sql(3)
     assert "p.arxiv_id = ANY($4::text[])" in cond
     assert params == [["cs.LG"], ["2106.09685", "2305.14314"]]
+
+
+def test_strip_generic_and_keyword_gate() -> None:
+    from retrieval.search import gate_keyword_hits, strip_generic
+
+    assert strip_generic("How does grouped-query attention reduce the memory cost of decoding?") == (
+        "How does grouped-query attention the memory of decoding"
+    )  # stopwords like "how" are dropped later by websearch_to_tsquery
+    assert strip_generic("new results") == "new results"  # nothing left: keep the query as it was
+    assert gate_keyword_hits(["a", "b", "c"], ["c", "x", "a"]) == ["a", "c"]

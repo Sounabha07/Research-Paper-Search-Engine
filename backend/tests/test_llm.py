@@ -65,6 +65,10 @@ class FakeRedis:
     async def expire(self, key: str, seconds: int) -> None:
         return None
 
+    async def decr(self, key: str) -> int:
+        self.data[key] = str(int(self.data.get(key, "0")) - 1)
+        return int(self.data[key])
+
 
 async def _no_sleep(_: float) -> None:
     return None
@@ -256,3 +260,16 @@ async def test_daily_quota_on_light_model_fails_fast(cfg: AppConfig) -> None:
     with pytest.raises(LLMQuotaExhausted, match="500 per day"):
         await client.generate("p", model=cfg.models.llm_light, purpose="read")
     assert len(fake.configs) == 1  # no retries: the daily quota does not come back within minutes
+
+
+async def test_daily_cap_raises_quota_exhausted(cfg: AppConfig) -> None:
+    from core.llm import LLMQuotaExhausted
+
+    capped = cfg.model_copy(update={"llm_client": cfg.llm_client.model_copy(
+        update={"daily_caps": {cfg.models.llm_light: 1}})})  # fmt: skip
+    fake = FakeGenai([_resp("one"), _resp("two")])
+    client, _ = _client(capped, fake, redis=FakeRedis())
+    assert (await client.generate("a", model=cfg.models.llm_light, purpose="read")).text == "one"
+    with pytest.raises(LLMQuotaExhausted, match="daily cap"):
+        await client.generate("b", model=cfg.models.llm_light, purpose="read")
+    assert len(fake.configs) == 1  # the second request was never sent

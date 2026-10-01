@@ -32,6 +32,8 @@ models:
 retrieval:
   paper_keyword_k: 100               # per query, over title + abstract
   paper_vector_k: 100
+  keyword_drop_generic: true         # drop generic question words before the AND keyword query (eval: PROGRESS.md)
+  keyword_gate_k: 200                # keyword hits must be in the vector channel's top N for the query (0 = off)
   rerank_top_n: 50                   # merged candidates sent to the reranker
   chunk_keyword_k: 50                # within the selected papers only
   chunk_vector_k: 50
@@ -66,6 +68,8 @@ llm_client:
   rpm_limits:                        # proactive requests-per-minute caps, shared by all processes (free tier)
     gemini-3.5-flash-lite: 14        # free tier: 15/min
     gemini-3.5-flash: 9              # conservative; its binding free-tier limit is 20 requests/day
+  daily_caps:                        # hard stop per Pacific-time day, counted by every process (app and eval scripts)
+    gemini-3.5-flash-lite: 450       # free tier: 500/day
   backoff_base_s: 1
   backoff_max_s: 30
   cache_ttl_days: 30                 # long enough that eval reruns (make eval ARGS=--answers) come from the cache
