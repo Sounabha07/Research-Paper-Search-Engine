@@ -93,7 +93,7 @@ resolve-refs:
 	$(COMPOSE) run --rm worker python -m ingest.fulltext_cli resolve-all
 
 # Adversarial verifier test (eval/verifier_adversarial.yaml). ARGS="--legacy" or "--no-names" for comparisons.
-EVAL_RUN := $(COMPOSE) run --rm -v ./eval:/app/eval -e PYTHONPATH=/app/backend worker python
+EVAL_RUN := $(COMPOSE) run --rm -v ./eval:/app/eval -e PYTHONPATH=/app/backend -e HF_HUB_OFFLINE=1 worker python
 eval-verifier:
 	$(EVAL_RUN) /app/eval/verifier_adversarial.py $(ARGS)
 

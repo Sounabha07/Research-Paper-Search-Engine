@@ -312,3 +312,19 @@ async def test_spurious_attribution_original_passes_recheck(cfg: AppConfig) -> N
     finals = await step_verify(_state(cfg, FakeLLM({"verify": respond})), [d], sources)
     assert [(f.verdict, f.text, f.reason) for f in finals] == [("supported", d.with_tags(), None)]
     assert "NOT a preprint" in calls[0]
+
+
+def test_chunk_style_arxiv_tags_are_repaired() -> None:
+    from agent.text import repair_tag
+
+    allowed = {"a:2604.00479", "c:18308"}
+    assert repair_tag("c:2604.00479", allowed) == "a:2604.00479"
+    assert repair_tag("c:2604.00479v2", allowed) == "a:2604.00479"  # version suffix dropped
+    assert repair_tag("c:1865.05165", allowed) is None  # garbled id: not among the passages
+    assert repair_tag("c:99999", allowed) is None  # a chunk id that was not provided
+    assert repair_tag("a:2601.00001", allowed) is None
+    drafts = parse_answer("GRPO collapses. [[c:2604.00479]] It also helps. [[c:18308]][[c:1865.05165]]", allowed)
+    assert [(d.tags, d.invalid_tags, d.repaired_tags) for d in drafts] == [
+        (["a:2604.00479"], [], ["c:2604.00479->a:2604.00479"]),
+        (["c:18308"], ["c:1865.05165"], []),
+    ]

@@ -183,11 +183,15 @@ answers written by gemini-3.5-flash-lite):
 
 | cost per answer | claims removed by the verifier | writer fallbacks | selected papers: recall@10 | answers citing an expected paper |
 |---|---|---|---|---|
-| $0.014 | 54 of 379 sentences (14.2%) | 0 | 0.600 | 28 of 40 |
+| $0.014 | 48 of 383 sentences (12.5%) | 0 | 0.600 | 28 of 40 |
 
-Removed claims by reason: no exact supporting span 26, writer tagging errors 16 (8 sentences without a source tag,
-8 with a malformed tag such as `[[c:2604.00479]]` for the abstract `[[a:2604.00479]]`), rewrite failed its re-check
-7, named term not in the source 3, unsupported 2.
+Removed claims by reason: no exact supporting span 26, no source tag 8, rewrite failed its re-check 6, named term not
+in the source 3, malformed source tag 3, unsupported 2.
+
+Tag repair: the writer sometimes cites an abstract with a chunk-style tag (`[[c:2604.00479]]` for `[[a:2604.00479]]`).
+Such tags are now mapped to the abstract when it is among the passages, and the sentence still goes through the
+verifier. Before the repair: 54 of 379 sentences removed (14.2%), 8 of them for malformed tags; after: 48 of 383
+(12.5%), 3 malformed tags left (garbled ids, not repairable). 5 tags were repaired in the 40 answers.
 
 **Citation precision** (95 random (sentence, cited passage) pairs, checked by hand): 90 fully supported and correctly
 attributed; 1 wrong (it reverses which paper generalizes which); 4 imprecise (2 add a detail the passage does not
@@ -217,8 +221,9 @@ rank 1 in the A/B set.
   flash-lite, and a model's 503/429 falls back to flash-lite (shown on the answer). An answer takes ~7 flash-lite
   requests; a hard cap of 450 a day (`llm_client.daily_caps`, counted across the app and the eval scripts) leaves
   room for about 60 answers a day. Cached answers cost nothing.
-- **Writer tagging errors.** flash-lite sometimes cites an abstract with a chunk-style tag (`[[c:2604.00479]]`) or
-  garbles an id; such sentences are removed even when the claim is right (16 of the 54 removals in the eval).
+- **Writer tagging errors.** flash-lite sometimes leaves a sentence untagged or garbles a source id; such sentences
+  are removed even when the claim is right (11 of the 48 removals in the eval). Chunk-style tags for an abstract are
+  repaired.
 - **Reranker saturation.** On a popular topic the cross-encoder gives dozens of newer papers that discuss the topic
   scores of ~0.99, the same as or above the paper the question is about, and the citation prior adds only ~0.01-0.05,
   so the original drops out of the top 10 even though it is among the candidates. Examples: "How does grouped-query

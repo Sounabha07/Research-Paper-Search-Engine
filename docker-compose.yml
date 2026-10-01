@@ -68,7 +68,8 @@ services:
 
   redis:
     image: redis:7
-    command: ["redis-server", "--appendonly", "yes"]
+    # AOF persistence (cache, rate-limit counters, job queues survive restarts); files in DATA_DIR/redis
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - ${DATA_DIR:-./data}/redis:/data
     healthcheck:

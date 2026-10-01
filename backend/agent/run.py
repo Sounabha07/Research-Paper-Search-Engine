@@ -649,6 +649,7 @@ async def _run(st: RunState) -> str:
         raw, model = await step_write(st, question, notes, context, sources)
         drafts = parse_answer(raw, set(by_id))
         await st.step("write", {"sentences": len(drafts), "untagged_or_invalid": sum(1 for d in drafts if not d.valid),
+                                "repaired_tags": sum(len(d.repaired_tags) for d in drafts),
                                 "model": model, "fallback": model != cfg.models.write_model, "raw": raw})  # fmt: skip
     await st.check_cancel()
 

@@ -612,3 +612,18 @@ Answer eval, all 40 questions, one configuration (results/20261001T105555Z; unca
 README: final retrieval and answer tables, keyword experiment, citation precision, known limitations (math not
 compared exactly, verifier can miss claims combining two sources, preprint detection depends on arXiv metadata,
 free-tier Gemini, writer tagging errors, reranker saturation, weekly new papers, in-corpus citation counts).
+
+### After milestone 8 (2026-10-01)
+- Tag repair (`agent/text.py: repair_tag`): a `[[c:<arxiv id>]]` tag (optionally with a version) is mapped to
+  `[[a:<id>]]` when that abstract is among the passages; garbled ids and non-provided chunk ids stay invalid; the
+  sentence still goes through VERIFY. WRITE records `repaired_tags`. Tests added.
+- 40-answer eval rerun from the cache (results/20261001T113059Z): only 20 new flash-lite calls (the VERIFY batches and
+  consensus calls whose input changed). Removed claims 54/379 (14.2%) -> 48/383 (12.5%); invalid-tag removals 8 -> 3;
+  5 tags repaired. Other reasons unchanged: no valid span 26, no source tag 8, rewrite not supported 6 (was 7), names
+  not in source 3, unsupported 2. Answers citing an expected paper: 28/40; selected recall@10 0.600.
+- Redis persistence: AOF was already on since milestone 1 (`--appendonly yes`, fsync every second by default, files in
+  DATA_DIR/redis). Correction to the previous report: Redis did not lose data in the Docker restart; the key listing
+  used `docker compose exec` inside a `while read` loop, which consumed the loop's input, so only one key was shown.
+  `--appendfsync everysec` is now explicit in docker-compose.yml; after recreating the container the daily counter
+  (280) and the 385 cache entries were intact.
+- Eval runs load models with `HF_HUB_OFFLINE=1` (a Hugging Face network blip crashed one eval run at model load).
