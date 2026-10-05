@@ -13,8 +13,8 @@ export function ModeToggle({ mode, onChange }: { mode: "quick" | "deep"; onChang
   );
   return (
     <div className="flex overflow-hidden rounded-md border border-border text-xs" role="group" aria-label="Mode">
-      {opt("quick", "Quick", "Search abstracts and cached full text (about 20 s)")}
-      {opt("deep", "Deep", "Also fetch full text for the selected papers and follow their references (up to 2 min)")}
+      {opt("quick", "Quick", "Fetch full text until 60% of the selected papers have it (up to 3 min)")}
+      {opt("deep", "Deep", "Fetch full text until 80% of the selected papers have it and follow their references (up to 6 min)")}
     </div>
   );
 }

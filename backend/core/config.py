@@ -6,7 +6,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -54,11 +54,14 @@ class ModelsConfig(_Section):
 
 
 class RetrievalConfig(_Section):
+    keyword_engine: Literal["bm25", "fts"] = "bm25"
+    bm25_title_boost: int = 2
     paper_keyword_k: int
     paper_vector_k: int
     keyword_drop_generic: bool = True
     keyword_gate_k: int = 200
     rerank_top_n: int
+    passage_rerank_top_n: int
     chunk_keyword_k: int
     chunk_vector_k: int
     rrf_k: int
@@ -75,12 +78,20 @@ class AgentConfig(_Section):
     papers_for_answer: int
     passages_for_answer: int
     max_passages_per_paper: int
-    fetch_wait_s: int
-    deep_max_fetch: int
+    passage_min_score: float
+    passage_detail_min_score: float
+    passage_detail_max: int
+    min_passages_kept: int
+    fetch_target_quick: float = Field(ge=0.0, le=1.0)
+    fetch_target_deep: float = Field(ge=0.0, le=1.0)
+    fetch_wait_quick_s: int
+    fetch_wait_deep_s: int
+    fetch_spare: int
     quick_timeout_s: int
     deep_timeout_s: int
     resume_grace_s: int
     max_notes: int
+    read_min_notes: int
     verify_batch_size: int
     consensus_claims: int
     chain_from_top_papers: int

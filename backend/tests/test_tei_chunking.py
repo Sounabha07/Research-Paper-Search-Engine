@@ -52,6 +52,17 @@ def test_tei_roundtrip_for_pymupdf(tmp_path: Path) -> None:
     assert parse_tei(read_parsed(path)).title == doc.title
 
 
+def test_tei_drops_xml_invalid_characters() -> None:
+    bad = "det " + chr(2) + " of " + chr(0) + "A"  # PyMuPDF text from math fonts
+    doc = ParsedDoc(title="T" + chr(27), sections=[Section("1 Intro", [[bad, "Second sentence."]])])
+    again = parse_tei(to_tei(doc))  # was: ParseError "not well-formed (invalid token)"
+    assert again.sections[0].paragraphs == [["det of A", "Second sentence."]] and again.title == "T"
+    # TEI files already written with the characters still parse
+    old = b"<?xml version='1.0' encoding='utf-8'?>\n<TEI xmlns=\"http://www.tei-c.org/ns/1.0\"><text><body><div>" \
+          b"<head>1 Intro</head><p><s>det \x02 x</s></p></div></body></text></TEI>"  # fmt: skip
+    assert parse_tei(old).sections[0].paragraphs == [["det x"]]
+
+
 def _long_doc() -> ParsedDoc:
     sections = []
     for s in range(3):

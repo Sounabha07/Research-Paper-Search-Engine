@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.routers import search as search_router
+from core.config import AgentConfig, AppConfig
 from retrieval.search import (
     Filters,
     PaperHit,
     Passage,
     apply_prior,
-    cap_per_paper,
     keep_pinned,
     merge_query_lists,
     name_matches,
     rrf_fuse,
+    select_evidence,
     title_name,
 )
 
@@ -45,11 +48,47 @@ def _p(arxiv_id: str, score: float) -> Passage:
     return Passage(arxiv_id, "chunk", 1, "S", "x", 0, 1, 0.0, score)
 
 
-def test_cap_per_paper() -> None:
-    ps = [_p("a", 0.9), _p("a", 0.8), _p("a", 0.7), _p("a", 0.6), _p("b", 0.5), _p("c", 0.4)]
-    out = cap_per_paper(ps, max_per_paper=3, limit=5)
-    assert [(p.arxiv_id, p.rerank_score) for p in out] == [("a", 0.9), ("a", 0.8), ("a", 0.7), ("b", 0.5), ("c", 0.4)]
-    assert len(cap_per_paper(ps, 3, 2)) == 2
+def _agent(cfg: AppConfig, **kw: object) -> AgentConfig:
+    base = {"max_passages_per_paper": 2, "passages_for_answer": 6, "passage_min_score": 0.5,
+            "passage_detail_min_score": 0.1, "passage_detail_max": 2, "min_passages_kept": 3}  # fmt: skip
+    return cfg.agent.model_copy(update={**base, **kw})
+
+
+def _ids(ps: list[Passage]) -> list[tuple[str, float]]:
+    return [(p.arxiv_id, p.rerank_score) for p in ps]
+
+
+def test_select_evidence_relevant_then_detail(cfg: AppConfig) -> None:
+    ps = [_p("a", 0.9), _p("a", 0.8), _p("a", 0.7), _p("b", 0.6), _p("b", 0.3), _p("c", 0.4), _p("d", 0.05)]
+    counts: dict[str, int] = {}
+    out = select_evidence(ps, _agent(cfg), counts)
+    # relevant (>= 0.5, 2 per paper): a .9, a .8, b .6; detail only from a/b with room: b .3; c has no relevant one
+    assert _ids(out) == [("a", 0.9), ("a", 0.8), ("b", 0.6), ("b", 0.3)]
+    assert counts == {"passages.relevant": 3, "passages.detail": 1, "passages.filled": 0, "passages.dropped": 3}
+
+
+def test_select_evidence_caps(cfg: AppConfig) -> None:
+    ps = [_p(x, 0.9 - i * 0.01) for i, x in enumerate("aaabbbcccddd")]
+    out = select_evidence(ps, _agent(cfg, passages_for_answer=5, passage_detail_max=5))
+    assert len(out) == 5 and max(sum(p.arxiv_id == x for p in out) for x in "abcd") <= 2
+
+
+def test_select_evidence_fills_to_minimum(cfg: AppConfig) -> None:
+    ps = [_p("a", 0.3), _p("b", 0.2), _p("c", 0.01), _p("d", 0.001)]
+    counts: dict[str, int] = {}
+    out = select_evidence(ps, _agent(cfg), counts)  # nothing reaches 0.5: the best 3 are kept anyway
+    assert _ids(out) == [("a", 0.3), ("b", 0.2), ("c", 0.01)]
+    assert counts["passages.relevant"] == 0 and counts["passages.filled"] == 3
+
+
+def test_bm25_filters_sql() -> None:
+    cond, params = Filters().bm25_sql(3)
+    assert cond == "p.state <> 'discovered'" and params == []
+    cond, params = Filters(year_from=2022, year_to=2024, categories=("cs.LG", "math"), restrict_ids=("x",)).bm25_sql(3)
+    assert "p.v1_date >= $3::timestamptz" in cond and "p.v1_date < $4::timestamptz" in cond
+    assert "p.categories @@@ pdb.term_set($5::text[])" in cond and "p.archives @@@ pdb.term_set($5::text[])" in cond
+    assert "p.arxiv_id = ANY($6::text[])" in cond
+    assert params == [datetime(2022, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC), ["cs.LG", "math"], ["x"]]
 
 
 def test_filters_sql() -> None:

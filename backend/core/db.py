@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import get_settings, require_env
 
+# Plan every statement with its actual parameters. With PostgreSQL's default, a prepared statement switches to a
+# generic plan after five runs, and pg_search then rejects a parameter cast inside a BM25 query
+# ("$1::text::pdb.boost(2)": the right-hand side of `|||` must be a text value).
+SERVER_SETTINGS = {"plan_cache_mode": "force_custom_plan"}
+
 
 @lru_cache(maxsize=1)
 def get_engine() -> AsyncEngine:
@@ -30,6 +35,7 @@ async def raw_connection() -> asyncpg.Connection:
         user=s.postgres_user,
         password=require_env("POSTGRES_PASSWORD"),
         database=s.postgres_db,
+        server_settings=SERVER_SETTINGS,
     )
     await register_vector(conn)
     return conn
@@ -44,7 +50,7 @@ async def create_pool(min_size: int = 1, max_size: int = 5) -> asyncpg.Pool:
     s = get_settings()
     pool = await asyncpg.create_pool(
         host=s.postgres_host, port=s.postgres_port, user=s.postgres_user, password=require_env("POSTGRES_PASSWORD"),
-        database=s.postgres_db, min_size=min_size, max_size=max_size, init=_init_conn,
+        database=s.postgres_db, min_size=min_size, max_size=max_size, init=_init_conn, server_settings=SERVER_SETTINGS,
     )  # fmt: skip
     assert pool is not None
     return pool

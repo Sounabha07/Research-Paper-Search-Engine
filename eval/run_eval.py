@@ -9,10 +9,14 @@ Retrieval (always): each question goes through section-11 retrieval with the que
 papers in the selected papers, MRR, passage hit@10 (a passage from an expected paper among the top 10), and
 retrieval latency p50/p95.
 
-Ablations (patched in this process only; production code is unchanged):
+Ablations (patched in this process only; production code is unchanged). Variants combine with "+":
   --no-keyword    keyword channels off (papers, chunks, and the title part of the anchor channel)
   --no-vector     vector channels off (papers, chunks, and the vector part of the anchor channel)
   --no-rerank     no cross-encoder: candidates keep their fused (RRF) order
+  fts             (in --ablations) the old keyword channel as it shipped (Postgres FTS, AND, ts_rank_cd; generic
+                  words dropped; hits gated by the vector top 200) instead of BM25
+  drop-generic    (in --ablations) generic question words dropped from the keyword query
+  gate            (in --ablations) keyword hits kept only if in the vector channel's top 200
   kw-or           (in --ablations) experiment: keyword channel with OR between terms, ranked by ts_rank_cd
   kw-generic      (in --ablations) experiment: generic question words removed before the AND keyword query
   kw-gated        (in --ablations) experiment: keyword hits kept only if in the vector channel's top 200
@@ -117,23 +121,18 @@ def anchor_variant(
 ) -> Callable[..., Awaitable[list[str]]]:
     """S.anchor_papers with one of its two parts switched off (or its vector part on another embedding table)."""
 
-    async def anchor(conn: asyncpg.Connection, query: str, vec: HalfVector, filters: S.Filters, k: int) -> list[str]:
-        cond, params = filters.sql(3)
+    async def anchor(
+        conn: asyncpg.Connection, query: str, vec: HalfVector, filters: S.Filters, k: int, engine: str = "bm25"
+    ) -> list[str]:
         lists = []
         if use_vector:
-            sql = vector_sql or (
-                f"SELECT p.arxiv_id FROM papers p WHERE {S.ANCHOR_FILTER} AND {{cond}} "
-                "ORDER BY p.abstract_embedding <=> $1 LIMIT $2"
-            )
-            lists.append([r["arxiv_id"] for r in await conn.fetch(sql.format(cond=cond), vec, k, *params)])
+            if vector_sql:
+                cond, params = filters.sql(3)
+                lists.append([r["arxiv_id"] for r in await conn.fetch(vector_sql.format(cond=cond), vec, k, *params)])
+            else:
+                lists.append(await S.anchor_vector(conn, vec, filters, k))
         if use_title:
-            rows = await conn.fetch(
-                "SELECT p.arxiv_id FROM papers p, replace(plainto_tsquery('english', $1)::text, ' & ', ' | ') AS qt"
-                f" WHERE qt <> '' AND {S.ANCHOR_FILTER} AND {cond} AND to_tsvector('english', p.title) @@ qt::tsquery"
-                " ORDER BY ts_rank_cd(to_tsvector('english', p.title), qt::tsquery) DESC LIMIT $2",
-                query, k, *params,
-            )  # fmt: skip
-            lists.append([r["arxiv_id"] for r in rows])
+            lists.append(await S.anchor_title(conn, query, filters, k, engine))
         return [a for a, _ in S.rrf_fuse(lists, 60)[:k]]
 
     return anchor
@@ -225,16 +224,18 @@ def strip_generic(query: str) -> str:
     return " ".join(w for w in re.findall(r"[\w'-]+", query) if w.lower() not in GENERIC_WORDS)
 
 
-async def keyword_papers_generic(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int) -> list[str]:
+async def keyword_papers_generic(
+    conn: asyncpg.Connection, query: str, filters: S.Filters, k: int, **kw: Any
+) -> list[str]:
     """Experiment (--ablations kw-generic): AND query over the question minus GENERIC_WORDS."""
-    return await _KW_ORIG(conn, strip_generic(query), filters, k)
+    return await _KW_ORIG(conn, strip_generic(query), filters, k, **kw)
 
 
 def keyword_papers_gated(models: S.SearchModels, inner: Callable[..., Awaitable[list[str]]] | None = None) -> Any:
     """Experiment (--ablations kw-gated): keyword hits kept only if the vector channel ranks them in its top 200."""
 
-    async def kw(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int) -> list[str]:
-        hits = await (inner or _KW_ORIG)(conn, query, filters, k)
+    async def kw(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int, **kwargs: Any) -> list[str]:
+        hits = await (inner or _KW_ORIG)(conn, query, filters, k, **kwargs)
         if not hits:
             return hits
         vec = HalfVector((await models.embed_queries([query]))[0])
@@ -244,7 +245,7 @@ def keyword_papers_gated(models: S.SearchModels, inner: Callable[..., Awaitable[
     return kw
 
 
-async def keyword_papers_or(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int) -> list[str]:
+async def keyword_papers_or(conn: asyncpg.Connection, query: str, filters: S.Filters, k: int, **_: Any) -> list[str]:
     """Experiment (--ablations kw-or): the keyword channel with OR instead of AND between the question's words,
     ranked by ts_rank_cd, so it returns papers matching most (not all) of the terms."""
     cond, params = filters.sql(3)
@@ -609,6 +610,16 @@ async def main() -> None:
             patches |= {"vector_papers": _empty, "vector_chunks": _empty, "anchor_papers": anchor_variant(False, True)}
             # the keyword gate needs the vector channel; without it the gate would drop every keyword hit
             vcfg = vcfg.model_copy(update={"retrieval": vcfg.retrieval.model_copy(update={"keyword_gate_k": 0})})
+        if "fts" in flags:  # the old keyword channel as it shipped: Postgres FTS (all terms, ts_rank_cd), generic
+            # question words dropped, hits gated by the vector channel's top 200
+            vcfg = vcfg.model_copy(update={"retrieval": vcfg.retrieval.model_copy(
+                update={"keyword_engine": "fts", "keyword_drop_generic": True, "keyword_gate_k": 200})})  # fmt: skip
+        if "drop-generic" in flags:  # drop generic question words from the keyword query
+            vcfg = vcfg.model_copy(
+                update={"retrieval": vcfg.retrieval.model_copy(update={"keyword_drop_generic": True})}
+            )
+        if "gate" in flags:  # keyword hits must be in the vector channel's top 200
+            vcfg = vcfg.model_copy(update={"retrieval": vcfg.retrieval.model_copy(update={"keyword_gate_k": 200})})
         if "kw-or" in flags:
             patches |= {"keyword_papers": keyword_papers_or}
         if "kw-generic" in flags and "kw-gated" in flags:
@@ -619,7 +630,7 @@ async def main() -> None:
             patches |= {"keyword_papers": keyword_papers_gated(models)}
         if "no-rerank" in flags:
             vmodels = RankOnlyModels(embedder, reranker, cfg)
-            vcfg = cfg.model_copy(update={"retrieval": cfg.retrieval.model_copy(update={"rerank_min_score": None})})
+            vcfg = vcfg.model_copy(update={"retrieval": vcfg.retrieval.model_copy(update={"rerank_min_score": None})})
         label = v
         if args.embedding:
             alt = load_embedder(

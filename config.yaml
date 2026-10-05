@@ -30,11 +30,17 @@ models:
   write_model: gemini-3.5-flash-lite # WRITE; gemini-3.5-flash is the other option
   write_thinking_level: minimal      # WRITE only; other calls use "low". flash accepts minimal|low|medium|high
 retrieval:
+  keyword_engine: bm25               # bm25: pg_search BM25 indexes (any query term, IDF-weighted);
+                                     # fts: Postgres ts_rank_cd with AND between terms (the old channel, kept for eval)
+  bm25_title_boost: 2                # BM25 title matches count this many times an abstract match
   paper_keyword_k: 100               # per query, over title + abstract
   paper_vector_k: 100
-  keyword_drop_generic: true         # drop generic question words before the AND keyword query
-  keyword_gate_k: 200                # keyword hits must be in the vector channel's top N for the query (0 = off)
-  rerank_top_n: 50                   # merged candidates sent to the reranker
+  keyword_drop_generic: false        # drop generic question words before the keyword query (fts needed it; BM25's
+                                     # IDF down-weights them, and dropping them lowered recall in the eval)
+  keyword_gate_k: 0                  # keyword hits must be in the vector channel's top N for the query (0 = off;
+                                     # fts needed 200, BM25 is better without it)
+  rerank_top_n: 50                   # merged paper candidates sent to the reranker
+  passage_rerank_top_n: 120          # fused chunk candidates sent to the reranker (20 papers x up to 4 passages)
   chunk_keyword_k: 50                # within the selected papers only
   chunk_vector_k: 50
   rrf_k: 60
@@ -46,15 +52,23 @@ retrieval:
   prior_boost_max: 0.05              # composite-score boost after rerank, capped
 agent:
   max_queries: 3                     # search queries generated from the question
-  papers_for_answer: 12              # top N papers used for the answer (10 to 15)
-  passages_for_answer: 25
-  max_passages_per_paper: 3
-  fetch_wait_s: 90                   # deep mode: max wait for full-text fetches
-  deep_max_fetch: 8                  # deep mode: only the top N selected papers get full text; the rest use abstracts
-  quick_timeout_s: 45
-  deep_timeout_s: 180
+  papers_for_answer: 20              # top N papers used for the answer
+  passages_for_answer: 40            # hard cap on passages given to READ
+  max_passages_per_paper: 4
+  passage_min_score: 0.2             # relevant passage: cross-encoder score (0-1) against the question
+  passage_detail_min_score: 0.02     # "more detail": weaker passages from papers that already have a relevant one...
+  passage_detail_max: 10             # ...at most this many
+  min_passages_kept: 8               # the best N passages are kept even below passage_min_score
+  fetch_target_quick: 0.6            # FETCH waits until this share of the selected papers has full text
+  fetch_target_deep: 0.8
+  fetch_wait_quick_s: 120            # max wait for that (bounded by the run deadline); then papers without
+  fetch_wait_deep_s: 240             # full text use their abstract
+  fetch_spare: 3                     # papers queued beyond the number needed, in case some fetches fail
+  quick_timeout_s: 180
+  deep_timeout_s: 360
   resume_grace_s: 60                 # a run resumed after a worker restart gets at least this much time left
   max_notes: 50
+  read_min_notes: 6                  # fewer READ notes (with more passages than that): read once more, keep the longer
   verify_batch_size: 5
   consensus_claims: 3
   chain_from_top_papers: 5            # deep mode: follow references of these papers

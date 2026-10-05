@@ -1,12 +1,14 @@
 """Hybrid retrieval: paper selection, then passage selection within the selected papers.
 
-Papers:   per query keyword top-k + vector top-k over title+abstract (with filters), RRF-fused;
-          queries merged by summed RRF; top `rerank_top_n`, plus the top `anchor_k` landmark/foundational
-          papers (anchor channel: vector + title keyword over those papers only), reranked with the cross-encoder on
-          (question, title + ". " + abstract); + capped prior `prior_boost_max * score`.
+Papers:   per query keyword top-k (BM25 via pg_search, or Postgres FTS: `keyword_engine`) + vector top-k over
+          title+abstract (with filters), RRF-fused; queries merged by summed RRF; top `rerank_top_n`, plus the top
+          `anchor_k` landmark/foundational papers (anchor channel: vector + title keyword over those papers only),
+          reranked with the cross-encoder on (question, title + ". " + abstract); + capped prior
+          `prior_boost_max * score`.
 Passages: for `ready` papers, keyword + vector over their chunks for the question and each query,
-          RRF-fused, top `rerank_top_n` reranked, at most `max_passages_per_paper` per paper.
-          Selected papers that are not ready contribute their abstract as one passage.
+          RRF-fused, top `passage_rerank_top_n` reranked. Selected papers that are not ready contribute their
+          abstract as one passage. `select_evidence` keeps the relevant ones, at most `max_passages_per_paper`
+          per paper, plus some weaker detail from the same papers.
 Every stage is timed; timings are returned with the result.
 """
 
@@ -19,6 +21,7 @@ from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import asyncpg
@@ -27,7 +30,7 @@ import numpy.typing as npt
 import orjson
 from pgvector import HalfVector
 
-from core.config import AppConfig
+from core.config import AgentConfig, AppConfig
 from core.embeddings import abstract_text, model_device, rerank
 
 if TYPE_CHECKING:
@@ -96,6 +99,32 @@ class Filters:
             clauses.append(
                 f"EXISTS (SELECT 1 FROM unnest(p.categories) c WHERE c = ANY(${n}::text[])"
                 f" OR split_part(c, '.', 1) = ANY(${n}::text[]))"
+            )
+            params.append(list(self.categories))
+            n += 1
+        if self.restrict_ids:
+            clauses.append(f"p.arxiv_id = ANY(${n}::text[])")
+            params.append(list(self.restrict_ids))
+        return " AND ".join(clauses), params
+
+    def bm25_sql(self, first_param: int) -> tuple[str, list[Any]]:
+        """Like sql(), written so that pg_search applies every condition inside the BM25 index (timestamptz
+        bounds, term sets on the indexed category columns). A condition it cannot push down would be checked
+        row by row against the table for every BM25 match."""
+        clauses: list[str] = ["p.state <> 'discovered'"]
+        params: list[Any] = []
+        n = first_param
+        if self.year_from is not None:
+            clauses.append(f"p.v1_date >= ${n}::timestamptz")
+            params.append(datetime(self.year_from, 1, 1, tzinfo=UTC))
+            n += 1
+        if self.year_to is not None:
+            clauses.append(f"p.v1_date < ${n}::timestamptz")
+            params.append(datetime(self.year_to + 1, 1, 1, tzinfo=UTC))
+            n += 1
+        if self.categories:
+            clauses.append(
+                f"(p.categories @@@ pdb.term_set(${n}::text[]) OR p.archives @@@ pdb.term_set(${n}::text[]))"
             )
             params.append(list(self.categories))
             n += 1
@@ -225,17 +254,53 @@ def keep_pinned(hits: list[PaperHit], selected: list[PaperHit], pinned: Sequence
     return sorted(pinned_hits + others[: max(0, limit - len(pinned_hits))], key=lambda h: -h.final_score)
 
 
-def cap_per_paper(passages: list[Passage], max_per_paper: int, limit: int) -> list[Passage]:
-    """Best-first, at most max_per_paper passages from any one paper, `limit` overall."""
+def select_evidence(passages: list[Passage], a: AgentConfig, counts: dict[str, int] | None = None) -> list[Passage]:
+    """The passages an answer is built from, best first, at most max_passages_per_paper from any one paper and
+    passages_for_answer overall:
+
+    1. relevant: cross-encoder score >= passage_min_score;
+    2. more detail: up to passage_detail_max weaker passages (>= passage_detail_min_score) from papers that
+       already have a relevant passage;
+    3. if fewer than min_passages_kept were chosen, the best remaining passages fill up to that number.
+    """
+    ranked = sorted(passages, key=lambda p: -p.rerank_score)
     taken: dict[str, int] = defaultdict(int)
-    out = []
-    for p in sorted(passages, key=lambda p: -p.rerank_score):
-        if taken[p.arxiv_id] < max_per_paper:
-            out.append(p)
-            taken[p.arxiv_id] += 1
-            if len(out) >= limit:
-                break
-    return out
+    chosen: list[int] = []
+
+    def take(i: int) -> None:
+        chosen.append(i)
+        taken[ranked[i].arxiv_id] += 1
+
+    def room(i: int) -> bool:
+        return i not in chosen and taken[ranked[i].arxiv_id] < a.max_passages_per_paper
+
+    for i, p in enumerate(ranked):
+        if len(chosen) >= a.passages_for_answer or p.rerank_score < a.passage_min_score:
+            break
+        if room(i):
+            take(i)
+    relevant = len(chosen)
+    with_relevant = {ranked[i].arxiv_id for i in chosen}
+    detail = 0
+    for i, p in enumerate(ranked):
+        if detail >= a.passage_detail_max or len(chosen) >= a.passages_for_answer:
+            break
+        if p.arxiv_id in with_relevant and p.rerank_score >= a.passage_detail_min_score and room(i):
+            take(i)
+            detail += 1
+    filled = 0
+    for i in range(len(ranked)):
+        if len(chosen) >= min(a.min_passages_kept, a.passages_for_answer):
+            break
+        if room(i):
+            take(i)
+            filled += 1
+    if counts is not None:
+        counts["passages.relevant"] = relevant
+        counts["passages.detail"] = detail
+        counts["passages.filled"] = filled
+        counts["passages.dropped"] = len(ranked) - len(chosen)
+    return [ranked[i] for i in sorted(chosen)]
 
 
 # ---- SQL -----------------------------------------------------------------------------------
@@ -339,7 +404,24 @@ def gate_keyword_hits(keyword: Sequence[str], vector_top: Sequence[str]) -> list
     return [a for a in keyword if a in allowed]
 
 
-async def keyword_papers(conn: asyncpg.Connection, query: str, filters: Filters, k: int) -> list[str]:
+async def keyword_papers(
+    conn: asyncpg.Connection, query: str, filters: Filters, k: int, engine: str = "bm25", title_boost: int = 2
+) -> list[str]:
+    """Keyword channel over title + abstract.
+
+    bm25: pg_search BM25 over the stemmed title (boosted) and abstract; a paper matches if it contains any query
+    term, and rare terms weigh more (IDF). fts: Postgres full-text search, all terms required, ranked by
+    ts_rank_cd (cover density).
+    """
+    if engine == "bm25":
+        cond, params = filters.bm25_sql(3)
+        rows = await conn.fetch(
+            # $1::text first: a parameter typed pdb.boost directly reaches the server without its typmod
+            f"SELECT p.arxiv_id FROM papers p WHERE (p.title ||| $1::text::pdb.boost({int(title_boost)})"
+            f" OR p.abstract ||| $1) AND {cond} ORDER BY pdb.score(p.arxiv_id) DESC LIMIT $2",
+            query, k, *params,
+        )  # fmt: skip
+        return [r["arxiv_id"] for r in rows]
     cond, params = filters.sql(3)
     rows = await conn.fetch(
         f"SELECT p.arxiv_id FROM papers p WHERE p.abstract_tsv @@ websearch_to_tsquery('english', $1) AND {cond}"
@@ -362,19 +444,32 @@ async def vector_papers(conn: asyncpg.Connection, vec: HalfVector, filters: Filt
 ANCHOR_FILTER = "(p.is_landmark OR p.is_foundational)"  # partial index papers_anchor
 
 
-async def anchor_papers(conn: asyncpg.Connection, query: str, vec: HalfVector, filters: Filters, k: int) -> list[str]:
-    """Anchor channel: vector search and title keyword match over landmark/foundational papers only.
-
-    The anchor set is small (~100s of papers), so both are exact scans via the partial index. Titles use an
-    OR query over the question's words (an AND query would almost never match a title).
-    """
+async def anchor_vector(conn: asyncpg.Connection, vec: HalfVector, filters: Filters, k: int) -> list[str]:
+    """Nearest landmark/foundational papers (an exact scan via the partial index: a few hundred rows)."""
     cond, params = filters.sql(3)
-    vector = await conn.fetch(
+    rows = await conn.fetch(
         f"SELECT p.arxiv_id FROM papers p WHERE {ANCHOR_FILTER} AND {cond}"
         " ORDER BY p.abstract_embedding <=> $1 LIMIT $2",
         vec, k, *params,
     )  # fmt: skip
-    title = await conn.fetch(
+    return [r["arxiv_id"] for r in rows]
+
+
+async def anchor_title(
+    conn: asyncpg.Connection, query: str, filters: Filters, k: int, engine: str = "bm25"
+) -> list[str]:
+    """Landmark/foundational papers whose title matches any of the query's words (an AND query would almost
+    never match a title). bm25: BM25 over the stemmed titles, the flags filtered inside the index."""
+    if engine == "bm25":
+        cond, params = filters.bm25_sql(3)
+        rows = await conn.fetch(
+            f"SELECT p.arxiv_id FROM papers p WHERE p.title ||| $1 AND {ANCHOR_FILTER} AND {cond}"
+            " ORDER BY pdb.score(p.arxiv_id) DESC LIMIT $2",
+            query, k, *params,
+        )  # fmt: skip
+        return [r["arxiv_id"] for r in rows]
+    cond, params = filters.sql(3)
+    rows = await conn.fetch(
         f"SELECT p.arxiv_id FROM papers p,"
         " replace(plainto_tsquery('english', $1)::text, ' & ', ' | ') AS qt"
         f" WHERE qt <> '' AND {ANCHOR_FILTER} AND {cond}"
@@ -382,11 +477,29 @@ async def anchor_papers(conn: asyncpg.Connection, query: str, vec: HalfVector, f
         " ORDER BY ts_rank_cd(to_tsvector('english', p.title), qt::tsquery) DESC LIMIT $2",
         query, k, *params,
     )  # fmt: skip
-    fused = rrf_fuse([[r["arxiv_id"] for r in vector], [r["arxiv_id"] for r in title]], 60)
-    return [a for a, _ in fused[:k]]
+    return [r["arxiv_id"] for r in rows]
 
 
-async def keyword_chunks(conn: asyncpg.Connection, query: str, papers: list[str], k: int) -> list[int]:
+async def anchor_papers(
+    conn: asyncpg.Connection, query: str, vec: HalfVector, filters: Filters, k: int, engine: str = "bm25"
+) -> list[str]:
+    """Anchor channel: vector search and title keyword match over landmark/foundational papers only, RRF-fused."""
+    vector = await anchor_vector(conn, vec, filters, k)
+    title = await anchor_title(conn, query, filters, k, engine)
+    return [a for a, _ in rrf_fuse([vector, title], 60)[:k]]
+
+
+async def keyword_chunks(
+    conn: asyncpg.Connection, query: str, papers: list[str], k: int, engine: str = "bm25"
+) -> list[int]:
+    """Keyword channel over the chunks of the given papers (bm25: any term, IDF-weighted; fts: all terms)."""
+    if engine == "bm25":
+        rows = await conn.fetch(
+            "SELECT c.id FROM chunks c WHERE c.text ||| $1 AND c.arxiv_id = ANY($3::text[])"
+            " ORDER BY pdb.score(c.id) DESC LIMIT $2",
+            query, k, papers,
+        )  # fmt: skip
+        return [r["id"] for r in rows]
     rows = await conn.fetch(
         "SELECT id FROM chunks WHERE arxiv_id = ANY($3::text[]) AND tsv @@ websearch_to_tsquery('english', $1)"
         " ORDER BY ts_rank_cd(tsv, websearch_to_tsquery('english', $1)) DESC LIMIT $2",
@@ -428,8 +541,9 @@ async def select_papers(
     for q, vec in zip(queries, vectors, strict=True):
         with timings.stage("papers.keyword"):
             kw = await keyword_papers(
-                conn, strip_generic(q) if r.keyword_drop_generic else q, filters, r.paper_keyword_k
-            )
+                conn, strip_generic(q) if r.keyword_drop_generic else q, filters, r.paper_keyword_k,
+                engine=r.keyword_engine, title_boost=r.bm25_title_boost,
+            )  # fmt: skip
         with timings.stage("papers.vector"):
             vc_top = await vector_papers(conn, HalfVector(vec), filters, max(r.paper_vector_k, r.keyword_gate_k))
         vc = vc_top[: r.paper_vector_k]
@@ -448,7 +562,9 @@ async def select_papers(
         anchor_lists = []
         with timings.stage("papers.anchor"):
             for q, vec in zip(queries, vectors, strict=True):
-                anchor_lists.append(await anchor_papers(conn, q, HalfVector(vec), filters, r.anchor_k))
+                anchor_lists.append(
+                    await anchor_papers(conn, q, HalfVector(vec), filters, r.anchor_k, engine=r.keyword_engine)
+                )
         present = {a for a, _ in candidates}
         for a, _ in merge_query_lists([[(x, 1.0 / (i + 1)) for i, x in enumerate(lst)] for lst in anchor_lists])[
             : r.anchor_k
@@ -519,11 +635,11 @@ async def select_passages(
         lists: list[list[int]] = []
         for q, vec in zip(queries, vectors, strict=True):
             with timings.stage("passages.keyword"):
-                lists.append(await keyword_chunks(conn, q, ready, r.chunk_keyword_k))
+                lists.append(await keyword_chunks(conn, q, ready, r.chunk_keyword_k, engine=r.keyword_engine))
             with timings.stage("passages.vector"):
                 lists.append(await vector_chunks(conn, HalfVector(vec), ready, r.chunk_vector_k))
         with timings.stage("passages.fusion"):
-            fused = rrf_fuse(lists, r.rrf_k)[: r.rerank_top_n]
+            fused = rrf_fuse(lists, r.rrf_k)[: r.passage_rerank_top_n]
     # Chunks cited earlier in the thread can be cited again without refetching.
     in_fused = {cid for cid, _ in fused}
     fused += [(cid, 0.0) for cid in reuse_chunks if cid not in in_fused]
@@ -556,15 +672,15 @@ async def select_passages(
             p.rerank_score = s
         passages = chunk_passages
 
-    # Selected papers without full text contribute their abstract (always kept).
+    # Selected papers without full text contribute their abstract, scored like a passage (the paper's rerank
+    # score is the same cross-encoder on the question and title + abstract).
     abstracts = [
         Passage(arxiv_id=p.arxiv_id, source="abstract", chunk_id=None, section="Abstract", text=p.abstract,
                 char_start=None, char_end=None, rrf=p.rrf, rerank_score=p.rerank_score)
         for p in papers
         if p.state != "ready"
     ]  # fmt: skip
-    chunks = cap_per_paper(passages, a.max_passages_per_paper, max(0, a.passages_for_answer - len(abstracts)))
-    return sorted(chunks + abstracts, key=lambda p: -p.rerank_score)
+    return select_evidence(passages + abstracts, a, counts)
 
 
 async def search(

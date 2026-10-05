@@ -18,6 +18,8 @@ NS = "http://www.tei-c.org/ns/1.0"
 T = f"{{{NS}}}"
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z(\[])")
 _YEAR = re.compile(r"(19|20)\d{2}")
+# Characters XML 1.0 does not allow; PyMuPDF text from math fonts contains some (e.g. \x02).
+_XML_INVALID = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 SKIP_BACK_TYPES = {"acknowledgement", "acknowledgment", "funding", "availability", "references"}
 
 
@@ -108,8 +110,17 @@ def _reference(position: int, bibl: ET.Element) -> Reference:
     return Reference(position, title, _year(bibl), arxiv_id, raw)
 
 
+def xml_safe(text: str | None) -> str | None:
+    return _XML_INVALID.sub("", text) if text else text
+
+
 def parse_tei(xml: bytes | str) -> ParsedDoc:
-    root = ET.fromstring(xml)
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        # TEI written by an earlier to_tei kept XML-invalid characters from PyMuPDF text: drop them and retry
+        raw = xml.decode("utf-8", "replace") if isinstance(xml, bytes) else xml
+        root = ET.fromstring(_XML_INVALID.sub("", raw).encode("utf-8"))
     doc = ParsedDoc(title=_text(root.find(f"{T}teiHeader/{T}fileDesc/{T}titleStmt/{T}title")))
     abstract = root.find(f"{T}teiHeader/{T}profileDesc/{T}abstract")
     if abstract is not None:
@@ -131,7 +142,7 @@ def to_tei(doc: ParsedDoc) -> bytes:
     root = ET.Element(f"{T}TEI")
     header = ET.SubElement(root, f"{T}teiHeader")
     title_stmt = ET.SubElement(ET.SubElement(header, f"{T}fileDesc"), f"{T}titleStmt")
-    ET.SubElement(title_stmt, f"{T}title").text = doc.title
+    ET.SubElement(title_stmt, f"{T}title").text = xml_safe(doc.title)
     text = ET.SubElement(root, f"{T}text")
     body = ET.SubElement(text, f"{T}body")
     profile = ET.SubElement(header, f"{T}profileDesc")
@@ -140,22 +151,22 @@ def to_tei(doc: ParsedDoc) -> bytes:
             div = ET.SubElement(ET.SubElement(profile, f"{T}abstract"), f"{T}div")
         else:
             div = ET.SubElement(body, f"{T}div")
-            ET.SubElement(div, f"{T}head").text = section.head
+            ET.SubElement(div, f"{T}head").text = xml_safe(section.head)
         for para in section.paragraphs:
             p = ET.SubElement(div, f"{T}p")
             for sentence in para:
-                ET.SubElement(p, f"{T}s").text = sentence
+                ET.SubElement(p, f"{T}s").text = xml_safe(sentence)
     if doc.references:
         list_bibl = ET.SubElement(ET.SubElement(ET.SubElement(text, f"{T}back"), f"{T}div", type="references"),
                                   f"{T}listBibl")  # fmt: skip
         for ref in doc.references:
             bibl = ET.SubElement(list_bibl, f"{T}biblStruct")
             if ref.title:
-                ET.SubElement(ET.SubElement(bibl, f"{T}analytic"), f"{T}title").text = ref.title
+                ET.SubElement(ET.SubElement(bibl, f"{T}analytic"), f"{T}title").text = xml_safe(ref.title)
             if ref.arxiv_id:
                 ET.SubElement(bibl, f"{T}idno", type="arXiv").text = ref.arxiv_id
             if ref.raw_text:
-                ET.SubElement(bibl, f"{T}note", type="raw_reference").text = ref.raw_text
+                ET.SubElement(bibl, f"{T}note", type="raw_reference").text = xml_safe(ref.raw_text)
     return bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
 
 

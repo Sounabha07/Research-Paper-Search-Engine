@@ -1,7 +1,9 @@
 """Answer pipeline: a fixed sequence, no agent loop.
 
-REWRITE -> FIND_PAPERS -> [FETCH, CHAIN: deep mode] -> PASSAGES -> READ -> WRITE -> VERIFY
+REWRITE -> FIND_PAPERS -> FETCH -> [CHAIN: deep mode] -> PASSAGES -> READ -> WRITE -> VERIFY
 -> CONSENSUS -> DONE.
+
+FETCH waits until a share of the selected papers has full text (`fetch_target_quick` / `fetch_target_deep`).
 
 Every step writes a `run_steps` row and publishes to Redis `run:{id}`. The run has an overall deadline
 (`quick_timeout_s` / `deep_timeout_s`): once it passes, remaining optional work is skipped, the answer is
@@ -13,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -30,7 +33,7 @@ from agent.threads import answer_markdown, citation_numbers, conversation_contex
 from agent.verify import SourceText, altered_math, find_span, missing_names
 from core.config import AppConfig
 from core.embeddings import abstract_text
-from core.fetchq import enqueue_fulltext
+from core.fetchq import demote_fulltext, enqueue_fulltext
 from core.llm import LLMClient
 from core.redis import fetch_done_channel, run_channel
 from retrieval.search import Filters, PaperHit, Passage, SearchModels, _json, search, search_passages
@@ -162,18 +165,31 @@ async def step_rewrite(st: RunState, context: str) -> prompts.RewriteOut:
 async def step_read(
     st: RunState, question: str, passages: list[Passage], titles: dict[str, tuple[str, int | None]]
 ) -> list[prompts.Note]:
+    """READ. flash-lite sometimes stops after a few notes although the passages hold much more; a result with
+    fewer than read_min_notes notes (when there are more passages than that) is read once more, at another
+    temperature (another cache key), and the longer list is kept."""
     cfg = st.deps.cfg
     allowed = {_passage_id(p) for p in passages}
-    res = await st.deps.llm.generate(
-        prompts.read_prompt(question, format_passages(passages, titles), cfg.agent.max_notes),
-        model=cfg.models.llm_light, purpose="read", schema=prompts.NotesOut, run_id=st.run_id,
-        temperature=0.1, max_output_tokens=JSON_MAX_TOKENS,
-    )  # fmt: skip
-    assert res.parsed is not None
-    notes = [n for n in res.parsed.notes if n.source_id.strip() in allowed][: cfg.agent.max_notes]
-    for n in notes:
-        n.source_id = n.source_id.strip()
-    await st.step("read", {"notes": len(notes), "dropped_invalid_source": len(res.parsed.notes) - len(notes),
+    prompt = prompts.read_prompt(question, format_passages(passages, titles), cfg.agent.max_notes)
+
+    async def read(temperature: float) -> tuple[list[prompts.Note], int]:
+        res = await st.deps.llm.generate(
+            prompt, model=cfg.models.llm_light, purpose="read", schema=prompts.NotesOut, run_id=st.run_id,
+            temperature=temperature, max_output_tokens=JSON_MAX_TOKENS,
+        )  # fmt: skip
+        assert res.parsed is not None
+        kept = [n for n in res.parsed.notes if n.source_id.strip() in allowed][: cfg.agent.max_notes]
+        for n in kept:
+            n.source_id = n.source_id.strip()
+        return kept, len(res.parsed.notes) - len(kept)
+
+    notes, dropped = await read(0.1)
+    retried = len(notes) < cfg.agent.read_min_notes < len(passages)
+    if retried:
+        again, dropped_again = await read(0.4)
+        if len(again) > len(notes):
+            notes, dropped = again, dropped_again
+    await st.step("read", {"notes": len(notes), "dropped_invalid_source": dropped, "retried": retried,
                            "items": [n.model_dump() for n in notes]})  # fmt: skip
     return notes
 
@@ -414,69 +430,135 @@ async def step_consensus(
     return claims
 
 
-# ---- deep-mode steps -----------------------------------------------------------------------------
+# ---- full text and references ---------------------------------------------------------------------
+
+
+def fetch_goal(n_papers: int, share: float) -> int:
+    """How many of n selected papers must have full text: the share, rounded up."""
+    return math.ceil(n_papers * share - 1e-9)
+
+
+class FetchPlan:
+    """Which papers FETCH queues: the papers without full text in rank order, only as many as the goal needs
+    plus `spare`; a paper that fails (abstract only) is replaced by the next one. Pure bookkeeping, no I/O."""
+
+    def __init__(self, candidates: list[str], ready: int, goal: int, spare: int) -> None:
+        self.candidates = candidates  # selected papers without full text, best first
+        self.goal = goal
+        self.ready = ready  # selected papers with full text
+        self.failed: list[str] = []
+        self.pending: list[str] = []  # queued, not finished
+        self.queued = 0  # how many of `candidates` were queued
+        self.spare = spare
+
+    def next_batch(self) -> list[str]:
+        """Papers to queue now so that pending fetches can still reach the goal (with spares)."""
+        want = max(0, self.goal - self.ready) + self.spare - len(self.pending)
+        if self.ready >= self.goal or want <= 0:
+            return []
+        batch = self.candidates[self.queued : self.queued + want]
+        self.queued += len(batch)
+        self.pending += batch
+        return batch
+
+    def finish(self, arxiv_id: str, state: str) -> None:
+        if arxiv_id not in self.pending:
+            return
+        self.pending.remove(arxiv_id)
+        if state == "ready":
+            self.ready += 1
+        else:
+            self.failed.append(arxiv_id)
+
+    @property
+    def reached(self) -> bool:
+        return self.ready >= self.goal
+
+    @property
+    def exhausted(self) -> bool:
+        """Nothing pending and nothing left to queue: the goal cannot be reached."""
+        return not self.pending and self.queued >= len(self.candidates)
 
 
 async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
-    """FETCH: queue selected papers without full text (urgent, rank order) and wait for them up to
-    fetch_wait_s (bounded by the run deadline), streaming progress. Papers still missing use their abstract.
-    Only the top deep_max_fetch selected papers are fetched; the rest use their abstract (or cached full text)."""
-    deps, cfg = st.deps, st.deps.cfg
-    top = hits[: cfg.agent.deep_max_fetch]
-    targets = [h.arxiv_id for h in top if h.state != "ready"]
-    not_fetched = sum(1 for h in hits[cfg.agent.deep_max_fetch :] if h.state != "ready")
-    if not targets:
-        await st.step("fetch", {"requested": 0, "ready": 0, "abstract_only": 0, "still_missing": [], "waited_s": 0,
-                                "beyond_max_fetch": not_fetched})  # fmt: skip
-        return
+    """FETCH: get full text for the selected papers until `fetch_target_quick` / `fetch_target_deep` of them have
+    it. Papers without full text are queued (urgent, rank order) as needed, a failed one replaced by the next; the
+    wait is bounded by `fetch_wait_quick_s` / `fetch_wait_deep_s` and the run deadline. Progress is streamed.
+    Papers still without full text afterwards use their abstract."""
+    deps, a = st.deps, st.deps.cfg.agent
+    deep = st.mode == "deep"
+    share = a.fetch_target_deep if deep else a.fetch_target_quick
+    plan = FetchPlan(
+        [h.arxiv_id for h in hits if h.state != "ready"],
+        sum(1 for h in hits if h.state == "ready"),
+        fetch_goal(len(hits), share),
+        a.fetch_spare,
+    )
+    base = {"papers": len(hits), "goal": plan.goal, "share": share, "ready_before": plan.ready}
     started = time.monotonic()
+    if plan.reached or not plan.candidates:
+        await st.step("fetch", {**base, "requested": 0, "ready": plan.ready, "reached": plan.reached,
+                                "abstract_only": 0, "still_missing": [], "waited_s": 0})  # fmt: skip
+        return
     pubsub = deps.redis.pubsub()
-    await pubsub.subscribe(*(fetch_done_channel(a) for a in targets))  # before enqueueing: no missed messages
+    # subscribe before enqueueing, to every candidate a replacement may need: no missed messages
+    await pubsub.subscribe(*(fetch_done_channel(x) for x in plan.candidates))
     try:
-        async with deps.pool.acquire() as conn:
-            outcome = await enqueue_fulltext(conn, deps.redis, targets, urgent=True)
-        finished: dict[str, str] = {a: "ready" for a, o in outcome.items() if o == "already_ready"}
-        finished |= {a: "abstract_only" for a, o in outcome.items() if o in ("abstract_only", "not_found")}
-        pending = [a for a in targets if a not in finished]
-        wait_until = min(started + cfg.agent.fetch_wait_s, st.deadline)
-        last_db_check = time.monotonic()
+        wait_until = min(started + (a.fetch_wait_deep_s if deep else a.fetch_wait_quick_s), st.deadline)
 
         async def report() -> None:
-            n_ready = sum(1 for s in finished.values() if s == "ready")
-            await st.progress(f"fetched {n_ready} of {len(targets)}", fetched=n_ready, total=len(targets))
+            await st.progress(f"full text for {plan.ready} of {len(hits)} papers (goal {plan.goal})",
+                              fetched=plan.ready, total=len(hits), goal=plan.goal)  # fmt: skip
 
+        async def enqueue() -> None:
+            while batch := plan.next_batch():
+                async with deps.pool.acquire() as conn:
+                    outcome = await enqueue_fulltext(conn, deps.redis, batch, urgent=True)
+                for x, o in outcome.items():
+                    if o == "already_ready":
+                        plan.finish(x, "ready")
+                    elif o in ("abstract_only", "not_found"):
+                        plan.finish(x, "abstract_only")
+
+        await enqueue()
         await report()
-        while pending and time.monotonic() < wait_until:
+        last_db_check = time.monotonic()
+        while not plan.reached and not plan.exhausted and time.monotonic() < wait_until:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            changed = False
             if msg is not None:
-                arxiv_id = str(msg["channel"]).removeprefix(fetch_done_channel(""))
-                if arxiv_id in pending:
-                    pending.remove(arxiv_id)
-                    finished[arxiv_id] = str(msg["data"])
-                    await report()
-            if time.monotonic() - last_db_check > 5:  # a paper can finish between steps of this loop
+                x = str(msg["channel"]).removeprefix(fetch_done_channel(""))
+                if x in plan.pending:
+                    plan.finish(x, str(msg["data"]))
+                    changed = True
+            if time.monotonic() - last_db_check > 5 and plan.pending:  # a paper can finish between loop steps
                 last_db_check = time.monotonic()
                 rows = await deps.pool.fetch(
                     "SELECT arxiv_id, state FROM papers"
                     " WHERE arxiv_id = ANY($1) AND state IN ('ready', 'abstract_only')",
-                    pending,
+                    plan.pending,
                 )
                 for r in rows:
-                    pending.remove(r["arxiv_id"])
-                    finished[r["arxiv_id"]] = r["state"]
-                if rows:
-                    await report()
+                    plan.finish(r["arxiv_id"], r["state"])
+                changed = changed or bool(rows)
+            if changed:
+                await enqueue()  # replace failed fetches
+                await report()
             await st.check_cancel()
     finally:
         await pubsub.unsubscribe()
         await pubsub.aclose()  # type: ignore[no-untyped-call]
+    # spares (or fetches past the wait) this run no longer waits for must not delay the next run's urgent fetches
+    moved = await demote_fulltext(deps.redis, plan.pending) if plan.pending else 0
     await st.step("fetch", {
-        "requested": len(targets),
-        "ready": sum(1 for s in finished.values() if s == "ready"),
-        "abstract_only": sum(1 for s in finished.values() if s != "ready"),
-        "still_missing": pending,
+        **base,
+        "requested": plan.queued,
+        "ready": plan.ready,
+        "reached": plan.reached,
+        "abstract_only": len(plan.failed),
+        "still_missing": plan.pending,
+        "moved_to_background": moved,
         "waited_s": round(time.monotonic() - started, 1),
-        "beyond_max_fetch": not_fetched,
     })  # fmt: skip
 
 
@@ -589,12 +671,13 @@ async def _run(st: RunState) -> str:
                                       "timings_ms": result.timings_ms, "counts": result.counts})  # fmt: skip
     await st.check_cancel()
 
+    # FETCH (both modes; the share of papers it waits for depends on the mode)
+    if "fetch" not in st.done and not st.past_deadline():
+        await step_fetch(st, hits)
+    await _refresh_states(deps.pool, hits)
+    await st.check_cancel()
+
     if st.mode == "deep":
-        # FETCH
-        if "fetch" not in st.done and not st.past_deadline():
-            await step_fetch(st, hits)
-        await _refresh_states(deps.pool, hits)
-        await st.check_cancel()
         # CHAIN
         if "chain" in st.done:
             added = await load_hits(deps.pool, st.done["chain"]["added"])
@@ -613,10 +696,11 @@ async def _run(st: RunState) -> str:
         passages = await load_passages(deps.pool, st.done["passages"]["passages"])
     else:
         async with deps.pool.acquire() as conn:
-            passages, p_timings, _ = await search_passages(
+            passages, p_timings, p_counts = await search_passages(
                 conn, deps.models, cfg, question, queries, hits, reuse_chunks
             )
-        await st.step("passages", {"passages": [_passage_payload(p) for p in passages], "timings_ms": p_timings})
+        await st.step("passages", {"passages": [_passage_payload(p) for p in passages], "timings_ms": p_timings,
+                                   "counts": p_counts})  # fmt: skip
     missing_titles = {p.arxiv_id for p in passages} - set(titles)
     if missing_titles:  # reused chunks from papers not selected this turn
         rows = await deps.pool.fetch(

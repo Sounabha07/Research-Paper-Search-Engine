@@ -13,9 +13,11 @@ the video are replayed from the response cache; live answers take about 20 to 40
 
 ## What it does
 
-- **Answers with checked citations.** Quick mode answers from abstracts and cached full text in ~20-30 s; deep mode
-  also fetches full text for the top papers (up to 8), follows their references, and takes 1-3 min. Each sentence
-  carries `[n]` chips: hover shows the passage, click opens the reader at that passage.
+- **Answers with checked citations.** An answer draws on up to 20 papers and at most 4 passages from each, keeping
+  only the passages relevant to the question plus a little more detail from the same papers. Quick mode fetches full
+  text until 60% of the selected papers have it (up to 3 min); deep mode until 80%, and also follows their references
+  (up to 6 min). Papers still without full text contribute their abstract. Each sentence carries `[n]` chips: hover
+  shows the passage, click opens the reader at that passage.
 - **Verification.** For every sentence the verifier must copy an exact supporting span from a cited source (checked
   in code); named methods, datasets, and authors must appear in the cited source; strong claims (proofs, "first",
   state of the art, resolving open problems) from preprints must be attributed ("a 2022 preprint by X claims ...").
@@ -43,7 +45,7 @@ flowchart LR
     KG[(Kaggle arXiv snapshot<br/>weekly)] --> W
     F -- "pdf_tmp/" --> W
     W -- "TEI" --> G[GROBID]
-    W <--> PG[(Postgres 17 + pgvector<br/>papers, chunks, citation edges,<br/>threads, runs, collections, feeds)]
+    W <--> PG[(Postgres 17: ParadeDB pg_search BM25<br/>+ pgvector; papers, chunks, citation edges,<br/>threads, runs, collections, feeds)]
     API <--> PG
     W -- "WRITE / VERIFY / READ ..." --> GM[(Gemini API<br/>flash-lite, flash)]
     API -- "summaries" --> GM
@@ -53,21 +55,25 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    RW[REWRITE<br/>standalone question<br/>+ 1-3 queries] --> FP[FIND_PAPERS<br/>keyword + vector + anchors,<br/>RRF, cross-encoder rerank]
-    FP --> FE[FETCH<br/>deep: full text for top 8]
+    RW[REWRITE<br/>standalone question<br/>+ 1-3 queries] --> FP[FIND_PAPERS<br/>BM25 + vector + anchors,<br/>RRF, cross-encoder rerank<br/>top 20]
+    FP --> FE[FETCH<br/>until 60% quick / 80% deep<br/>have full text]
     FE --> CH[CHAIN<br/>deep: references of the top 5]
-    CH --> PA[PASSAGES<br/>chunks + abstracts, reranked]
+    CH --> PA[PASSAGES<br/>chunks + abstracts, reranked;<br/>relevant + detail, max 4 per paper]
     PA --> RD[READ<br/>evidence notes]
     RD --> WR[WRITE<br/>tagged sentences]
     WR --> VE[VERIFY<br/>exact span, names,<br/>preprint attribution]
     WR --> CO[CONSENSUS<br/>supports / contradicts]
 ```
 
-Retrieval: per query, Postgres full-text search and HNSW vector search over abstracts
+Retrieval: per query, BM25 keyword search (ParadeDB `pg_search`: stemmed title and abstract, title boosted, any
+query term, IDF-weighted; filters applied inside the index) and HNSW vector search over abstracts
 (`BAAI/bge-small-en-v1.5`, halfvec), fused with reciprocal rank fusion, plus an anchor channel over landmark and
-foundational papers; candidates are reranked with `BAAI/bge-reranker-v2-m3`, combined with a citation/metadata prior,
-and filtered by a minimum score. Passages come from the chunks of full-text papers the same way; abstract-only papers
-contribute their abstract.
+foundational papers (vector + BM25 title match); candidates are reranked with `BAAI/bge-reranker-v2-m3`, combined with
+a citation/metadata prior, and filtered by a minimum score; the top 20 are selected. Passages come from the chunks of
+full-text papers the same way (BM25 + vector within the selected papers); abstract-only papers contribute their
+abstract. Of the reranked passages, those scoring at least `agent.passage_min_score` are kept (at most 4 per paper,
+40 in all), plus up to 10 weaker ones from papers that already have a relevant passage. The old Postgres
+full-text keyword channel is still available (`retrieval.keyword_engine: fts`) for comparison.
 
 Full text on demand: the fetcher downloads a PDF, GROBID parses it to TEI (PyMuPDF as fallback), the worker chunks
 (~350 tokens, section-aware), embeds, marks the paper ready, then resolves its bibliography into citation edges
@@ -138,9 +144,53 @@ make eval ARGS="--ablations baseline,no-keyword,no-vector,no-rerank"
 make eval ARGS="--chunk-size 200"                      # re-chunks full-text papers into eval_cs200
 make eval ARGS="--embedding BAAI/bge-base-en-v1.5"     # builds eval_emb_* once (hours)
 make eval ARGS="--answers"                             # answer pipeline, cached LLM responses
+make eval ARGS="--ablations baseline,fts"              # BM25 vs the old Postgres FTS keyword channel
 ```
 
-### Results
+### Results: BM25, 20 papers, fetch targets (2026-10-05)
+
+Rebuilt corpus (Kaggle snapshot of 2026-10, 828,181 papers; at the retrieval eval only the 103 landmark papers had
+full text), so these numbers are not comparable with the 2026-10-01 results below, which had thousands of full-text
+papers. Same 40 questions; retrieval uses the question as the only query.
+
+| variant | recall@10 | MRR | passage hit@10 | latency p50 | latency p95 |
+|---|---|---|---|---|---|
+| **production: BM25** (all words, no gate) | **0.637** | **0.567** | **0.750** | 2.0 s | 2.6 s |
+| old keyword channel (FTS, AND, generic words dropped, gated) | 0.613 | 0.565 | 0.725 | 1.7 s | 2.1 s |
+| BM25 + generic words dropped + gate (the FTS fixes) | 0.613 | 0.531 | 0.725 | 2.3 s | 3.2 s |
+| BM25 + gate | 0.637 | 0.566 | 0.725 | 1.6 s | 2.4 s |
+| no keyword | 0.613 | 0.573 | 0.725 | 1.5 s | 1.8 s |
+| no vector | 0.588 | 0.554 | 0.725 | 1.4 s | 2.1 s |
+| no rerank | 0.512 | 0.392 | 0.675 | 0.3 s | 0.4 s |
+
+BM25 finds one more expected paper and one more expected passage than the old channel; MRR is equal. The two fixes
+the AND query needed (dropping generic question words, keeping only keyword hits the vector channel also ranks in
+its top 200) hurt BM25, whose IDF already discounts common words, so both are off (`retrieval.keyword_drop_generic`,
+`retrieval.keyword_gate_k`). With 40 questions, a difference of 0.025 recall is one question: BM25 is at least as
+good, not clearly better; the keyword channel still adds little over vector search plus the reranker.
+
+**Answers** (all 40 questions, live, the same day):
+
+| | quick (30) | deep (10) |
+|---|---|---|
+| latency p50 / p95 | 66 s / 147 s | 104 s / 215 s |
+| timed out | 0 | 0 |
+| fetch goal reached (60% / 80% of 20 papers with full text) | 27 of 30 | 10 of 10 |
+
+| cost per answer | claims removed by the verifier | writer fallbacks | selected papers: recall@10 | Gemini requests per answer |
+|---|---|---|---|---|
+| $0.023 | 11.2% | 0 | 0.637 | ~7.3 |
+
+Passages per answer: 37.7 on average (cap 40), nearly all above `passage_min_score`. The three quick runs that missed
+the 60% goal reached 7, 11, and 11 of 12 papers within the 120 s fetch wait. Causes found and fixed afterwards: spare
+fetches of the previous run kept their place in the urgent queue (now moved to the bulk queue when a run stops
+waiting); PyMuPDF-parsed papers whose TEI held XML-invalid characters never finished (now sanitized); and the weekly
+snapshot cron job, which ran inside the worker and blocked it for 5 minutes on Monday 00:30 UTC (now a child
+process, with its 8 h timeout). Then 12 more answers on topics with no full text yet, back to back: 8 with the queue
+fix, of which 5 reached the goal (two misses overlapped the old cron job, one reached 11 of 12 right after a worker
+restart), and 4 with the cron fix while the weekly job ran next to them, all of which reached it (36-67 s of fetching).
+
+### Earlier results (2026-10-01, previous corpus)
 
 Eval of 2026-10-01, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
 (no LLM rewrite), so these numbers are retrieval alone.
@@ -222,6 +272,12 @@ rank 1 in the A/B set.
   flash-lite, and a model's 503/429 falls back to flash-lite (shown on the answer). An answer takes ~7 flash-lite
   requests; a hard cap of 450 a day (`llm_client.daily_caps`, counted across the app and the eval scripts) leaves
   room for about 60 answers a day. Cached answers cost nothing.
+- **Answers wait for full text.** Quick mode fetches until 60% of the 20 selected papers have full text, deep mode
+  80%. arXiv allows one request every 3.1 s and GROBID parses 2 PDFs at a time, so a question on a topic with no
+  full text yet takes about 1-2.5 min (quick) or 1.5-4 min (deep), and concurrent users share one fetch queue. Papers
+  still pending when the wait ends keep downloading in the background and are used by later questions.
+- **Citation precision was not re-checked by hand** for the BM25 / 20-paper configuration; the sample to check is in
+  `eval/results/citation_sample_20261004T230801Z.csv` (local; `eval/results/` is not committed).
 - **Writer tagging errors.** flash-lite sometimes leaves a sentence untagged or garbles a source id; such sentences
   are removed even when the claim is right (11 of the 48 removals in the eval). Chunk-style tags for an abstract are
   repaired.

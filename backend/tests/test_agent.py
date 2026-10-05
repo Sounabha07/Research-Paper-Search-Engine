@@ -346,3 +346,20 @@ def test_drop_status_labels() -> None:
         == "A 2022 preprint by Fukuyama claims a proof."
     )
     assert drop_status_labels("a landmark result in landmark detection") == "a landmark result in landmark detection"
+
+
+async def test_read_retries_when_too_few_notes(cfg: AppConfig) -> None:
+    passages = [Passage("2106.09685", "chunk", i, "S", f"text {i}", 0, 4, 0.0, 0.9) for i in range(8)]
+    few = prompts.NotesOut(notes=[prompts.Note(claim="x", source_id="c:1")])
+    many = prompts.NotesOut(notes=[prompts.Note(claim=f"n{i}", source_id=f"c:{i}") for i in range(7)])
+    answers = iter([few, many])
+    llm = FakeLLM({"read": lambda _: next(answers)})
+    st = _state(cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"read_min_notes": 6})}), llm)
+    out = await step_read(st, "q", passages, {"2106.09685": ("LoRA", 2021)})
+    assert len(out) == 7 and len(llm.calls) == 2  # read again, kept the longer list
+    assert st.steps[-1][1]["retried"] is True  # type: ignore[attr-defined]
+
+    llm2 = FakeLLM({"read": few})
+    st2 = _state(cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"read_min_notes": 10})}), llm2)
+    await step_read(st2, "q", passages, {"2106.09685": ("LoRA", 2021)})
+    assert len(llm2.calls) == 1  # no more passages than read_min_notes: no second read

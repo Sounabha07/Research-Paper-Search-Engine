@@ -2,7 +2,8 @@
 to its query plus keywords, summarized with llm_light.
 
 Candidates are papers submitted in the last `feeds.digest_days`: the nearest by abstract embedding, and any whose
-title or abstract contains a keyword. The best RERANK_CANDIDATES by similarity are scored with the cross-encoder
+title or abstract contains a keyword (with keyword_engine bm25: the keyword as a stemmed phrase, best BM25 matches
+first; with fts: a substring). The best RERANK_CANDIDATES by similarity are scored with the cross-encoder
 (as in search); score = rerank score + keyword_boost if a keyword matches. Kept: score at least min_score, best
 top_n. (Embedding similarity alone could not separate on-topic papers from near misses.)
 """
@@ -44,6 +45,11 @@ def period_of(now: datetime) -> str:
     """ISO week, e.g. 2026-W40: one digest per feed and week."""
     y, w, _ = now.isocalendar()
     return f"{y}-W{w:02d}"
+
+
+def keyword_phrase_sql(n: int, first_param: int) -> str:
+    """BM25 condition: any of n keyword parameters ($first_param ...) as a phrase in the title or abstract."""
+    return " OR ".join(f"p.title ### ${first_param + i} OR p.abstract ### ${first_param + i}" for i in range(n))
 
 
 def matched_keywords(keywords: list[str], title: str, abstract: str) -> list[str]:
@@ -104,7 +110,16 @@ async def build_digest(
             qvec, since, VECTOR_CANDIDATES,
         )  # fmt: skip
         kw_rows = []
-        if keywords:
+        if keywords and cfg.retrieval.keyword_engine == "bm25":
+            # each keyword as a phrase (stemmed) in the title or abstract, best BM25 matches first
+            kw_rows = await conn.fetch(
+                "SELECT p.arxiv_id, p.title, p.abstract,"
+                " CASE WHEN p.abstract_embedding IS NULL THEN 0 ELSE 1 - (p.abstract_embedding <=> $1) END"
+                f" AS similarity FROM papers p WHERE p.v1_date >= $2 AND ({keyword_phrase_sql(len(keywords), 4)})"
+                " ORDER BY pdb.score(p.arxiv_id) DESC LIMIT $3",
+                qvec, since, VECTOR_CANDIDATES, *keywords,
+            )  # fmt: skip
+        elif keywords:
             kw_rows = await conn.fetch(
                 "SELECT arxiv_id, title, abstract,"
                 " CASE WHEN abstract_embedding IS NULL THEN 0 ELSE 1 - (abstract_embedding <=> $1) END AS similarity"

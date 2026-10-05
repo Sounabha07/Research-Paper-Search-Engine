@@ -45,7 +45,8 @@ def test_landmarks_file_exists(cfg: AppConfig) -> None:
 def test_paper_index_definitions_match_migration() -> None:
     from ingest.indexes import PAPER_INDEXES
 
-    migration = (REPO_ROOT / "backend" / "migrations" / "versions" / "0001_initial.py").read_text(encoding="utf-8")
+    versions = REPO_ROOT / "backend" / "migrations" / "versions"
+    migration = "".join(p.read_text(encoding="utf-8") for p in sorted(versions.glob("0*.py")))
     flat = " ".join(migration.replace('"\n    "', "").split())
     for name, ddl in PAPER_INDEXES.items():
         body = ddl.replace("IF NOT EXISTS ", "")

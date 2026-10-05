@@ -85,6 +85,19 @@ async def enqueue_fulltext(
     return outcome
 
 
+async def demote_fulltext(redis: Redis, arxiv_ids: Iterable[str]) -> int:
+    """Move queued urgent PDF jobs to the back of the bulk queue (a research run stopped waiting for them: they are
+    still fetched, but no longer ahead of other urgent requests). Jobs the fetcher already took are left alone.
+    Returns how many were moved."""
+    moved = 0
+    for arxiv_id in dict.fromkeys(arxiv_ids):
+        job = pdf_job(arxiv_id)
+        if await cast(Awaitable[int], redis.lrem(FETCH_URGENT, 0, job)):
+            await _rpush(redis, FETCH_BULK, job)
+            moved += 1
+    return moved
+
+
 async def enqueue_meta(redis: Redis, arxiv_ids: Iterable[str]) -> int:
     """Queue metadata lookups for referenced arXiv ids missing from the DB (bulk priority)."""
     ids = list(dict.fromkeys(arxiv_ids))

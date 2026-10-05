@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 import uuid
 from typing import Any, ClassVar
@@ -20,7 +21,7 @@ from pgvector.asyncpg import register_vector
 
 from agent.run import AgentDeps, execute_run
 from core.config import ensure_data_dirs, get_config, get_settings, require_env
-from core.db import get_sessionmaker
+from core.db import SERVER_SETTINGS, get_sessionmaker
 from core.embeddings import load_embedder, load_reranker
 from core.llm import LLMClient, db_call_logger
 from core.logging import setup_logging
@@ -126,11 +127,22 @@ async def nightly_job(ctx: dict[str, Any]) -> str:
     return f"harvest queued from {frm}" if frm else "OAI-PMH harvest disabled"
 
 
-async def weekly_snapshot_job(ctx: dict[str, Any]) -> str:
-    """Mondays 00:30 UTC: latest Kaggle snapshot, new/changed papers only, then the post-harvest steps."""
-    from ingest.weekly import weekly_snapshot
+WEEKLY_TIMEOUT_S = 8 * 3600
 
-    return await weekly_snapshot(ctx["cfg"])
+
+async def weekly_snapshot_job(ctx: dict[str, Any]) -> str:
+    """Mondays 00:30 UTC: latest Kaggle snapshot, new/changed papers only, then the post-harvest steps.
+
+    Runs `python -m ingest.weekly` in a child process: streaming the 3M-line snapshot inside this worker blocked its
+    event loop, stalling research runs, searches, and the full-text pipeline for as long as the job ran."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "ingest.weekly", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+    out, _ = await proc.communicate()
+    tail = out.decode(errors="replace").strip()[-2000:]
+    if proc.returncode != 0:
+        raise RuntimeError(f"ingest.weekly exited with {proc.returncode}: {tail}")
+    return tail
 
 
 async def post_harvest_job(ctx: dict[str, Any]) -> str:
@@ -190,6 +202,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     pool = await asyncpg.create_pool(
         host=settings.postgres_host, port=settings.postgres_port, user=settings.postgres_user,
         password=require_env("POSTGRES_PASSWORD"), database=settings.postgres_db, min_size=1, max_size=6, init=_init,
+        server_settings=SERVER_SETTINGS,
     )  # fmt: skip
     embedder, reranker = await asyncio.gather(
         asyncio.to_thread(load_embedder, cfg), asyncio.to_thread(load_reranker, cfg)
@@ -233,7 +246,7 @@ class WorkerSettings:
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(resolve_refs_job, max_tries=3, timeout=900, keep_result=0),
         func(post_harvest_job, max_tries=1, timeout=6 * 3600, keep_result=3600),
-        func(weekly_snapshot_job, max_tries=1, timeout=8 * 3600, keep_result=3600),
+        func(weekly_snapshot_job, max_tries=1, timeout=WEEKLY_TIMEOUT_S, keep_result=3600),
         func(digest_job, max_tries=1, timeout=1800, keep_result=3600),
         func(embed_abstracts_job, timeout=6 * 3600, max_tries=1),
         func(recompute_scores_job, timeout=3600, max_tries=1),
@@ -241,7 +254,8 @@ class WorkerSettings:
     cron_jobs: ClassVar[list[Any]] = [
         cron(janitor_job, minute={0, 30}, run_at_startup=True),
         cron(nightly_job, hour=2, minute=0, unique=True),  # container clock is UTC; a no-op while disabled
-        cron(weekly_snapshot_job, weekday="mon", hour=0, minute=30, unique=True),  # before the 03:00 digests
+        # before the 03:00 digests; a cron entry does not inherit the func() timeout above (default: 300 s)
+        cron(weekly_snapshot_job, weekday="mon", hour=0, minute=30, unique=True, timeout=WEEKLY_TIMEOUT_S),
         cron(digest_job, weekday="mon", hour=3, minute=0, unique=True),
     ]
     on_startup = startup

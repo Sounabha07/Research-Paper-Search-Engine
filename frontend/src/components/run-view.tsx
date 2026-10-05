@@ -304,10 +304,12 @@ function Trace({ run, progress }: { run: Run; progress: string | null }) {
             )}
             {s.type === "fetch" && (
               <div className="text-muted-foreground">
-                {Number(p.requested) === 0
-                  ? "all selected papers already had full text"
-                  : `${p.ready} of ${p.requested} now full text in ${p.waited_s} s` +
-                    ((p.still_missing as string[]).length ? ` · ${(p.still_missing as string[]).length} still pending (abstract used)` : "")}
+                {`${p.ready} of ${p.papers} papers with full text (goal ${p.goal})` +
+                  (Number(p.requested) === 0
+                    ? p.reached ? " · nothing to fetch" : " · no paper left to fetch"
+                    : ` · ${p.requested} queued, waited ${p.waited_s} s` +
+                      (Number(p.abstract_only) ? ` · ${p.abstract_only} unavailable` : "") +
+                      ((p.still_missing as string[]).length ? ` · ${(p.still_missing as string[]).length} still pending (abstract used)` : ""))}
               </div>
             )}
             {s.type === "chain" && (
@@ -320,7 +322,16 @@ function Trace({ run, progress }: { run: Run; progress: string | null }) {
               </div>
             )}
             {s.type === "passages" && (
-              <div className="text-muted-foreground">{(p.passages as unknown[]).length} passages</div>
+              <div className="text-muted-foreground">
+                {(p.passages as unknown[]).length} passages
+                {p.counts != null &&
+                  (() => {
+                    const c = p.counts as Record<string, number>;
+                    return ` (${c["passages.relevant"] ?? 0} relevant, ${c["passages.detail"] ?? 0} more detail` +
+                      (c["passages.filled"] ? `, ${c["passages.filled"]} best of the rest` : "") +
+                      `; ${c["passages.dropped"] ?? 0} not relevant enough)`;
+                  })()}
+              </div>
             )}
             {s.type === "read" && <div className="text-muted-foreground">{String(p.notes)} evidence notes</div>}
             {s.type === "write" && (

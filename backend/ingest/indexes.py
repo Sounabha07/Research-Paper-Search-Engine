@@ -1,8 +1,8 @@
 """Secondary indexes on `papers`, and a bulk mode that drops and rebuilds them.
 
-A non-HOT update or insert must touch every index on the table (two GIN, several btrees,
+A non-HOT update or insert must touch every index on the table (two GIN, BM25, several btrees,
 HNSW). For writes that hit a large share of the table, dropping the secondary indexes
-and rebuilding each once afterwards is much faster. Definitions match migration 0001.
+and rebuilding each once afterwards is much faster. Definitions match migrations 0001 and 0003.
 
 Usage: python -m ingest.indexes ensure     # recreate any missing index
 """
@@ -31,6 +31,13 @@ PAPER_INDEXES: dict[str, str] = {
         "USING hnsw (abstract_embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64)"
     ),
     "papers_abstract_tsv_gin": "CREATE INDEX IF NOT EXISTS papers_abstract_tsv_gin ON papers USING gin (abstract_tsv)",
+    "papers_bm25": (
+        "CREATE INDEX IF NOT EXISTS papers_bm25 ON papers USING bm25 (arxiv_id,"
+        " (title::pdb.simple('stemmer=english', 'stopwords_language=english')),"
+        " (abstract::pdb.simple('stemmer=english', 'stopwords_language=english')),"
+        " (state::pdb.literal), (categories::pdb.literal), (archives::pdb.literal),"
+        " v1_date, is_landmark, is_foundational) WITH (key_field='arxiv_id')"
+    ),
     "papers_title_norm_trgm": (
         "CREATE INDEX IF NOT EXISTS papers_title_norm_trgm ON papers USING gin (title_norm gin_trgm_ops)"
     ),

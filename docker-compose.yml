@@ -37,7 +37,8 @@ x-gpu: &gpu
 
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    # ParadeDB: Postgres 17 with pg_search (BM25 indexes) and pgvector 0.8 preinstalled
+    image: paradedb/paradedb:0.25.11-pg17
     environment:
       POSTGRES_USER: arxiv
       POSTGRES_DB: arxiv
