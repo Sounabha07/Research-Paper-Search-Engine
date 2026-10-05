@@ -59,12 +59,14 @@ agent:
   passage_detail_min_score: 0.02     # "more detail": weaker passages from papers that already have a relevant one...
   passage_detail_max: 10             # ...at most this many
   min_passages_kept: 8               # the best N passages are kept even below passage_min_score
-  fetch_target_quick: 0.6            # FETCH waits until this share of the selected papers has full text
-  fetch_target_deep: 0.8
-  fetch_wait_quick_s: 120            # max wait for that (bounded by the run deadline); then papers without
-  fetch_wait_deep_s: 240             # full text use their abstract
+  fetch_target_quick: 0.6            # mandatory: FETCH waits until this share of the selected papers has full
+  fetch_target_deep: 0.8             # text, even past the run's time limit (quick_timeout_s / deep_timeout_s)
+  answer_reserve_quick_s: 70         # after the minimum, FETCH keeps fetching until the time limit minus this
+  answer_reserve_deep_s: 100         # (time for READ, WRITE, VERIFY: p95 measured 70 s quick, 99 s deep)
+  fetch_max_wait_quick_s: 300        # safety stop for the mandatory wait (arXiv or GROBID down); normal cold
+  fetch_max_wait_deep_s: 480         # fetches took 40-245 s
   fetch_spare: 3                     # papers queued beyond the number needed, in case some fetches fail
-  quick_timeout_s: 180
+  quick_timeout_s: 180               # time limit: past it, optional steps are skipped (the mandatory share is not)
   deep_timeout_s: 360
   resume_grace_s: 60                 # a run resumed after a worker restart gets at least this much time left
   max_notes: 50

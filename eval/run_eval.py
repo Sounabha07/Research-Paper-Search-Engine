@@ -472,7 +472,7 @@ async def answer_eval(questions: list[dict[str, Any]], sample_n: int, stamp: str
             break
         created = await asyncio.to_thread(_http, "POST", "/threads", {"question": q["question"], "mode": q["mode"]})
         run_id = created["run_id"]
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + 900
         run: dict[str, Any] = {}
         while time.monotonic() < deadline:
             run = await asyncio.to_thread(_http, "GET", f"/runs/{run_id}")

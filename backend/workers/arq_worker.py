@@ -241,7 +241,7 @@ class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         ping,
         func(search_job, timeout=120, max_tries=1, keep_result=60),
-        func(research_run_job, timeout=600, max_tries=1, keep_result=0),
+        func(research_run_job, timeout=900, max_tries=1, keep_result=0),  # mandatory FETCH can pass the deadline
         func(parse_paper, max_tries=MAX_PARSE_FAILURES + 1, timeout=900, keep_result=0),
         func(chunk_paper, max_tries=5, timeout=900, keep_result=0),
         func(resolve_refs_job, max_tries=3, timeout=900, keep_result=0),

@@ -84,8 +84,10 @@ class AgentConfig(_Section):
     min_passages_kept: int
     fetch_target_quick: float = Field(ge=0.0, le=1.0)
     fetch_target_deep: float = Field(ge=0.0, le=1.0)
-    fetch_wait_quick_s: int
-    fetch_wait_deep_s: int
+    answer_reserve_quick_s: int
+    answer_reserve_deep_s: int
+    fetch_max_wait_quick_s: int
+    fetch_max_wait_deep_s: int
     fetch_spare: int
     quick_timeout_s: int
     deep_timeout_s: int

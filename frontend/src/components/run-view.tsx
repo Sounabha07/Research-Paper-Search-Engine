@@ -304,12 +304,14 @@ function Trace({ run, progress }: { run: Run; progress: string | null }) {
             )}
             {s.type === "fetch" && (
               <div className="text-muted-foreground">
-                {`${p.ready} of ${p.papers} papers with full text (goal ${p.goal})` +
+                {`${p.ready} of ${p.papers} papers with full text (minimum ${p.goal}` +
+                  (p.reached ? (p.reached_after_s ? `, reached after ${p.reached_after_s} s)` : ", reached)") : ", not reached)") +
                   (Number(p.requested) === 0
-                    ? p.reached ? " · nothing to fetch" : " · no paper left to fetch"
-                    : ` · ${p.requested} queued, waited ${p.waited_s} s` +
+                    ? ""
+                    : ` · ${p.requested} queued, ${p.waited_s} s fetching` +
                       (Number(p.abstract_only) ? ` · ${p.abstract_only} unavailable` : "") +
-                      ((p.still_missing as string[]).length ? ` · ${(p.still_missing as string[]).length} still pending (abstract used)` : ""))}
+                      ((p.still_missing as string[]).length ? ` · ${(p.still_missing as string[]).length} still pending (abstract used)` : "")) +
+                  (p.stopped ? ` · stopped: ${p.stopped}` : "")}
               </div>
             )}
             {s.type === "chain" && (

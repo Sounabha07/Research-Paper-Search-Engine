@@ -14,9 +14,10 @@ the video are replayed from the response cache; live answers take about 20 to 40
 ## What it does
 
 - **Answers with checked citations.** An answer draws on up to 20 papers and at most 4 passages from each, keeping
-  only the passages relevant to the question plus a little more detail from the same papers. Quick mode fetches full
-  text until 60% of the selected papers have it (up to 3 min); deep mode until 80%, and also follows their references
-  (up to 6 min). Papers still without full text contribute their abstract. Each sentence carries `[n]` chips: hover
+  only the passages relevant to the question plus a little more detail from the same papers. Full text first: at
+  least 60% (quick) or 80% (deep) of the selected papers must have full text before the answer is written, even if
+  that takes longer than the mode's time limit (3 min quick, 6 min deep); with the minimum reached, fetching goes on
+  while time is left. Deep mode also follows references. Papers still without full text contribute their abstract. Each sentence carries `[n]` chips: hover
   shows the passage, click opens the reader at that passage.
 - **Verification.** For every sentence the verifier must copy an exact supporting span from a cited source (checked
   in code); named methods, datasets, and authors must appear in the cited source; strong claims (proofs, "first",
@@ -56,7 +57,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     RW[REWRITE<br/>standalone question<br/>+ 1-3 queries] --> FP[FIND_PAPERS<br/>BM25 + vector + anchors,<br/>RRF, cross-encoder rerank<br/>top 20]
-    FP --> FE[FETCH<br/>until 60% quick / 80% deep<br/>have full text]
+    FP --> FE[FETCH<br/>min. 60% quick / 80% deep<br/>full text, more if time left]
     FE --> CH[CHAIN<br/>deep: references of the top 5]
     CH --> PA[PASSAGES<br/>chunks + abstracts, reranked;<br/>relevant + detail, max 4 per paper]
     PA --> RD[READ<br/>evidence notes]
@@ -190,6 +191,15 @@ process, with its 8 h timeout). Then 12 more answers on topics with no full text
 fix, of which 5 reached the goal (two misses overlapped the old cron job, one reached 11 of 12 right after a worker
 restart), and 4 with the cron fix while the weekly job ran next to them, all of which reached it (36-67 s of fetching).
 
+These runs used a fixed fetch wait (120 s quick, 240 s deep) that could end below the minimum. FETCH now works in two
+phases: the minimum is mandatory, even past the time limit (only a safety stop, `fetch_max_wait_quick_s` 300 s /
+`fetch_max_wait_deep_s` 480 s, for an arXiv or GROBID outage, or running out of fetchable papers ends it early); with
+the minimum reached, it keeps fetching the remaining papers until the time limit minus `answer_reserve_*_s` (70 s / 100
+s, the measured p95 of the steps after FETCH). Live checks on new topics: quick reached its 12 papers after 66 s and
+all 20 after 94 s (answer in 121 s); deep reached 16 after 163 s and all 20 after 242 s (266 s); with the quick time
+limit set to 30 s for a test, FETCH still went on to 12 of 20 (165 s), then READ and CONSENSUS were skipped and the
+run ended `timed_out` with a verified answer.
+
 ### Earlier results (2026-10-01, previous corpus)
 
 Eval of 2026-10-01, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
@@ -272,10 +282,11 @@ rank 1 in the A/B set.
   flash-lite, and a model's 503/429 falls back to flash-lite (shown on the answer). An answer takes ~7 flash-lite
   requests; a hard cap of 450 a day (`llm_client.daily_caps`, counted across the app and the eval scripts) leaves
   room for about 60 answers a day. Cached answers cost nothing.
-- **Answers wait for full text.** Quick mode fetches until 60% of the 20 selected papers have full text, deep mode
-  80%. arXiv allows one request every 3.1 s and GROBID parses 2 PDFs at a time, so a question on a topic with no
-  full text yet takes about 1-2.5 min (quick) or 1.5-4 min (deep), and concurrent users share one fetch queue. Papers
-  still pending when the wait ends keep downloading in the background and are used by later questions.
+- **Answers wait for full text.** At least 60% (quick) or 80% (deep) of the 20 selected papers get full text
+  before the answer is written, even past the time limit, and fetching continues while time is left, so answers use
+  most of their time budget (about 2-3 min quick, 4-6 min deep on new topics). arXiv allows one request every 3.1 s
+  and GROBID parses 2 PDFs at a time, and concurrent users share one fetch queue, so a busy queue can push the
+  mandatory part past the limit. Papers still pending when FETCH ends keep downloading in the background.
 - **Citation precision was not re-checked by hand** for the BM25 / 20-paper configuration; the sample to check is in
   `eval/results/citation_sample_20261004T230801Z.csv` (local; `eval/results/` is not committed).
 - **Writer tagging errors.** flash-lite sometimes leaves a sentence untagged or garbles a source id; such sentences

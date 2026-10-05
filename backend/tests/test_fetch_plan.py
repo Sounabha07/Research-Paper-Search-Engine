@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agent.digest import keyword_phrase_sql
-from agent.run import FetchPlan, fetch_goal
+from agent.run import FetchPlan, fetch_goal, fetch_stop_at
 from core.config import AppConfig
 
 
@@ -44,11 +44,33 @@ def test_plan_already_reached() -> None:
     assert plan.reached and plan.next_batch() == []
 
 
+def test_plan_keeps_fetching_past_the_minimum() -> None:
+    plan = FetchPlan([f"p{i}" for i in range(8)], ready=10, goal=12, spare=1)
+    assert plan.next_batch() == ["p0", "p1", "p2"]  # 2 missing + 1 spare
+    plan.finish("p0", "ready")
+    plan.finish("p1", "ready")
+    assert plan.reached and plan.done
+    plan.aim_for_all(20)  # time left: every selected paper
+    assert plan.reached and not plan.done
+    assert plan.next_batch() == ["p3", "p4", "p5", "p6", "p7"]  # the rest (fewer than 8 missing + spare)
+    assert plan.minimum == 12 and plan.goal == 20
+
+
+def test_stop_rule_minimum_is_mandatory() -> None:
+    below = FetchPlan(["a"], ready=0, goal=1, spare=0)
+    assert fetch_stop_at(below, mandatory_stop=500.0, budget_stop=100.0) == 500.0  # past the time budget: wait
+    above = FetchPlan(["a"], ready=1, goal=1, spare=0)
+    assert fetch_stop_at(above, mandatory_stop=500.0, budget_stop=100.0) == 100.0  # extra fetching: budget only
+
+
 def test_mode_targets(cfg: AppConfig) -> None:
     a = cfg.agent
     assert a.papers_for_answer == 20 and a.max_passages_per_paper == 4
     assert a.fetch_target_quick == 0.6 and a.fetch_target_deep == 0.8
-    assert a.fetch_wait_quick_s < a.quick_timeout_s and a.fetch_wait_deep_s < a.deep_timeout_s
+    assert a.quick_timeout_s == 180 and a.deep_timeout_s == 360
+    assert a.answer_reserve_quick_s < a.quick_timeout_s and a.answer_reserve_deep_s < a.deep_timeout_s
+    # the safety stop is past the time limit: the minimum is fetched even when that takes longer
+    assert a.fetch_max_wait_quick_s > a.quick_timeout_s and a.fetch_max_wait_deep_s > a.deep_timeout_s
     assert cfg.retrieval.keyword_engine == "bm25"
 
 

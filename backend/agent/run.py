@@ -3,7 +3,8 @@
 REWRITE -> FIND_PAPERS -> FETCH -> [CHAIN: deep mode] -> PASSAGES -> READ -> WRITE -> VERIFY
 -> CONSENSUS -> DONE.
 
-FETCH waits until a share of the selected papers has full text (`fetch_target_quick` / `fetch_target_deep`).
+FETCH waits until a share of the selected papers has full text (`fetch_target_quick` / `fetch_target_deep`),
+even past the deadline, then keeps fetching while time is left.
 
 Every step writes a `run_steps` row and publishes to Redis `run:{id}`. The run has an overall deadline
 (`quick_timeout_s` / `deep_timeout_s`): once it passes, remaining optional work is skipped, the answer is
@@ -439,12 +440,14 @@ def fetch_goal(n_papers: int, share: float) -> int:
 
 
 class FetchPlan:
-    """Which papers FETCH queues: the papers without full text in rank order, only as many as the goal needs
-    plus `spare`; a paper that fails (abstract only) is replaced by the next one. Pure bookkeeping, no I/O."""
+    """Which papers FETCH queues: the papers without full text in rank order, only as many as the current goal
+    needs plus `spare`; a paper that fails (abstract only) is replaced by the next one. The goal starts at the
+    mandatory minimum and is raised to every candidate for the extra fetching. Pure bookkeeping, no I/O."""
 
     def __init__(self, candidates: list[str], ready: int, goal: int, spare: int) -> None:
         self.candidates = candidates  # selected papers without full text, best first
-        self.goal = goal
+        self.minimum = goal  # mandatory: this many selected papers must have full text
+        self.goal = goal  # current target: the minimum, then every selected paper
         self.ready = ready  # selected papers with full text
         self.failed: list[str] = []
         self.pending: list[str] = []  # queued, not finished
@@ -470,20 +473,41 @@ class FetchPlan:
         else:
             self.failed.append(arxiv_id)
 
+    def aim_for_all(self, n_papers: int) -> None:
+        """Minimum reached and time left: keep fetching until every selected paper has full text."""
+        self.goal = max(self.goal, n_papers)
+
     @property
     def reached(self) -> bool:
+        """The mandatory minimum is reached."""
+        return self.ready >= self.minimum
+
+    @property
+    def done(self) -> bool:
         return self.ready >= self.goal
 
     @property
     def exhausted(self) -> bool:
-        """Nothing pending and nothing left to queue: the goal cannot be reached."""
+        """Nothing pending and nothing left to queue: no more paper can get full text."""
         return not self.pending and self.queued >= len(self.candidates)
 
 
+def fetch_stop_at(plan: FetchPlan, mandatory_stop: float, budget_stop: float) -> float:
+    """When FETCH stops waiting: below the minimum only at the safety stop (the minimum is mandatory even past
+    the run's time limit); with the minimum reached, when the time budget left for fetching is used up."""
+    return budget_stop if plan.reached else mandatory_stop
+
+
 async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
-    """FETCH: get full text for the selected papers until `fetch_target_quick` / `fetch_target_deep` of them have
-    it. Papers without full text are queued (urgent, rank order) as needed, a failed one replaced by the next; the
-    wait is bounded by `fetch_wait_quick_s` / `fetch_wait_deep_s` and the run deadline. Progress is streamed.
+    """FETCH, in two phases:
+
+    1. mandatory: wait until `fetch_target_quick` / `fetch_target_deep` of the selected papers have full text,
+       even past the run's time limit; only the safety stop (`fetch_max_wait_*_s`, for an arXiv or GROBID
+       outage) or running out of fetchable papers ends it early;
+    2. extra: with the minimum reached, keep fetching the remaining papers while the run has time left, keeping
+       `answer_reserve_*_s` for the steps after FETCH.
+
+    Papers are queued (urgent, rank order) as needed, a failed one replaced by the next. Progress is streamed.
     Papers still without full text afterwards use their abstract."""
     deps, a = st.deps, st.deps.cfg.agent
     deep = st.mode == "deep"
@@ -494,21 +518,25 @@ async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
         fetch_goal(len(hits), share),
         a.fetch_spare,
     )
-    base = {"papers": len(hits), "goal": plan.goal, "share": share, "ready_before": plan.ready}
+    base = {"papers": len(hits), "goal": plan.minimum, "share": share, "ready_before": plan.ready}
     started = time.monotonic()
-    if plan.reached or not plan.candidates:
+    mandatory_stop = started + (a.fetch_max_wait_deep_s if deep else a.fetch_max_wait_quick_s)
+    budget_stop = st.deadline - (a.answer_reserve_deep_s if deep else a.answer_reserve_quick_s)
+    if not plan.candidates or (plan.reached and started >= budget_stop):
         await st.step("fetch", {**base, "requested": 0, "ready": plan.ready, "reached": plan.reached,
-                                "abstract_only": 0, "still_missing": [], "waited_s": 0})  # fmt: skip
+                                "reached_after_s": 0.0 if plan.reached else None, "abstract_only": 0,
+                                "still_missing": [], "moved_to_background": 0, "waited_s": 0,
+                                "stopped": "nothing to fetch" if not plan.candidates else "time limit"})  # fmt: skip
         return
+    reached_after: float | None = 0.0 if plan.reached else None
     pubsub = deps.redis.pubsub()
     # subscribe before enqueueing, to every candidate a replacement may need: no missed messages
     await pubsub.subscribe(*(fetch_done_channel(x) for x in plan.candidates))
     try:
-        wait_until = min(started + (a.fetch_wait_deep_s if deep else a.fetch_wait_quick_s), st.deadline)
 
         async def report() -> None:
-            await st.progress(f"full text for {plan.ready} of {len(hits)} papers (goal {plan.goal})",
-                              fetched=plan.ready, total=len(hits), goal=plan.goal)  # fmt: skip
+            await st.progress(f"full text for {plan.ready} of {len(hits)} papers (minimum {plan.minimum})",
+                              fetched=plan.ready, total=len(hits), goal=plan.minimum)  # fmt: skip
 
         async def enqueue() -> None:
             while batch := plan.next_batch():
@@ -520,10 +548,24 @@ async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
                     elif o in ("abstract_only", "not_found"):
                         plan.finish(x, "abstract_only")
 
+        def update_goal() -> None:
+            nonlocal reached_after
+            if plan.reached and reached_after is None:
+                reached_after = time.monotonic() - started
+            if plan.reached and time.monotonic() < budget_stop:
+                plan.aim_for_all(len(hits))  # time left: keep going past the minimum
+
+        update_goal()
         await enqueue()
         await report()
         last_db_check = time.monotonic()
-        while not plan.reached and not plan.exhausted and time.monotonic() < wait_until:
+
+        def keep_waiting() -> bool:
+            if plan.done or plan.exhausted:
+                return False
+            return time.monotonic() < fetch_stop_at(plan, mandatory_stop, budget_stop)
+
+        while keep_waiting():
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             changed = False
             if msg is not None:
@@ -542,23 +584,34 @@ async def step_fetch(st: RunState, hits: list[PaperHit]) -> None:
                     plan.finish(r["arxiv_id"], r["state"])
                 changed = changed or bool(rows)
             if changed:
-                await enqueue()  # replace failed fetches
+                update_goal()
+                await enqueue()  # replace failed fetches; past the minimum, queue the rest
                 await report()
             await st.check_cancel()
     finally:
         await pubsub.unsubscribe()
         await pubsub.aclose()  # type: ignore[no-untyped-call]
-    # spares (or fetches past the wait) this run no longer waits for must not delay the next run's urgent fetches
+    if plan.ready >= len(hits):
+        stopped = "all papers have full text"
+    elif plan.exhausted:
+        stopped = "no more papers can be fetched"
+    elif plan.reached:
+        stopped = "time limit (minimum reached)"
+    else:
+        stopped = "safety stop (minimum not reached)"
+    # fetches this run no longer waits for must not delay the next run's urgent fetches
     moved = await demote_fulltext(deps.redis, plan.pending) if plan.pending else 0
     await st.step("fetch", {
         **base,
         "requested": plan.queued,
         "ready": plan.ready,
         "reached": plan.reached,
+        "reached_after_s": round(reached_after, 1) if reached_after is not None else None,
         "abstract_only": len(plan.failed),
         "still_missing": plan.pending,
         "moved_to_background": moved,
         "waited_s": round(time.monotonic() - started, 1),
+        "stopped": stopped,
     })  # fmt: skip
 
 
@@ -614,7 +667,8 @@ async def execute_run(deps: AgentDeps, run_id: uuid.UUID) -> str:
         return "missing"
     if run["status"] not in ("queued", "running"):
         return f"skip ({run['status']})"
-    lock_ttl = deps.cfg.agent.deep_timeout_s + 300
+    a = deps.cfg.agent  # the lock outlives the longest possible run
+    lock_ttl = max(a.deep_timeout_s, a.fetch_max_wait_deep_s + a.answer_reserve_deep_s) + 300
     if not await deps.redis.set(_lock_key(run_id), "1", nx=True, ex=lock_ttl):
         return "already running elsewhere"
     try:
@@ -671,8 +725,8 @@ async def _run(st: RunState) -> str:
                                       "timings_ms": result.timings_ms, "counts": result.counts})  # fmt: skip
     await st.check_cancel()
 
-    # FETCH (both modes; the share of papers it waits for depends on the mode)
-    if "fetch" not in st.done and not st.past_deadline():
+    # FETCH (both modes; its mandatory share of papers is fetched even past the deadline)
+    if "fetch" not in st.done:
         await step_fetch(st, hits)
     await _refresh_states(deps.pool, hits)
     await st.check_cancel()
