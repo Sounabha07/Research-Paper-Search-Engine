@@ -200,6 +200,26 @@ all 20 after 94 s (answer in 121 s); deep reached 16 after 163 s and all 20 afte
 limit set to 30 s for a test, FETCH still went on to 12 of 20 (165 s), then READ and CONSENSUS were skipped and the
 run ended `timed_out` with a verified answer.
 
+**Answers with the two-phase FETCH** (all 40 questions again, 2026-10-05):
+
+| | quick (30) | deep (10) |
+|---|---|---|
+| latency p50 / p95 | 127 s / 135 s | 278 s / 302 s |
+| timed out | 0 | 0 |
+| minimum reached (60% / 80% of 20 papers with full text) | 30 of 30 | 10 of 10 |
+| papers with full text at the end (average / lowest) | 75% / 65% | 94.5% / 90% |
+
+| cost per answer | claims removed by the verifier | writer fallbacks | selected papers: recall@10 |
+|---|---|---|---|
+| $0.021 | 13.3% | 0 | 0.637 |
+
+These questions had been asked the day before, so on average 14 (quick) and 18 (deep) of their 20 papers already
+had full text and the minimum held from the start; this run measures the extra fetching (answers now use their time
+budget: ~127 s of the 180 s quick limit, ~278 s of 360 s deep). The live checks above cover fetching the minimum from
+scratch. READ was retried for too few notes in 3 of 40 runs. With the corpus grown to ~900 full-text papers and
+PageRank recomputed by the weekly job, the retrieval baseline the same morning was recall@10 0.637, MRR 0.607, passage
+hit@10 0.750 (0.567 MRR the day before).
+
 ### Earlier results (2026-10-01, previous corpus)
 
 Eval of 2026-10-01, 40 questions (32 cs, 8 math; 30 quick, 10 deep). Retrieval uses the question as the only query
